@@ -1,9 +1,9 @@
 # Handoff
 
-## Initial public package
+## Organiser 0.3.4: Docked chest open reliability & smarter bank sorting
 
-Organiser 0.3.3 is packaged as a public Mod Manager module. Its manifest, adapter, storage service and dock are installed together under `Modules/Organiser`. The integrated build's loot chest fix is carried forward from commit `f046c86`.
+Organiser 0.3.4 ports the verified docked-HUD and category-planning fixes into the public module (`Modules/Organiser/`), keeping `organiser.json` persistence and public boundary exclusions (no private shortcut bindings, full-menu shortcut button, or deposit Magic XP bonus; trash incineration off by default).
 
-The module starts and stops with the public host's runtime contract, reads and writes the module-owned `organiser.json` through the host store, and uses the host's existing scheduler for paced transfers. Reload reuses the dock timer and native hook registrations, cancels in-progress planning and rejects callbacks queued by the previous instance. Private shortcuts, the direct full-menu launcher and Magic XP bonuses are excluded. Trash incineration is off for new installations.
-
-Offline on 25 November 2026, all 37 tests passed and every Lua and JSON file parsed. An isolated copy of published Mod Manager commit `8c8f885` discovered and started the folder, reused the dock timer and hooks on reload, and retained a setting in `organiser.json`. To repeat the unit tests, run `python -m unittest discover -s Tools/tests` with Python and `lupa`. The public installation and reload checklist remains pending in the game.
+- `rlm_organiser.lua`: `open_storage()` iterates `pairs(panels)` prioritising `IsActivated() == true` over `IsVisible() == true`, and `storage_from_api()` avoids strict world-scan locks on already-open built chests while rejecting player inventory, loot/dungeon chests (`IsA(BaseBuildingActor)` when resolved), and `NON_STORAGE_PATTERNS` display props/stations. Broad crafting catch-alls (`Basic`, `Component`, `Processed`, `Special`, etc.) yield `1.5` vs `2` to any specific category on multi-category items, `infer_categories_from_identity()` covers tagged and untagged crafting items via `CRAFT_INFERENCE_RULES`, `organiser_document()` prunes stale rack/station labels, and `plan_base_roles()` uses demand-first role assignment and proportional bulk splits.
+- `rlm_organiser_hud.lua`: adds `widget_is_active_or_visible()`, `refresh_hosts(open_panel)`, `station_is_visible()`, stale-frame removal on host switch, transition diagnostics via `diag_once()`, and an `rlm_async` backup tick pump when `LoopInGameThreadWithDelay` stalls.
+- Unit suite in `Tools/tests/test_organiser.py` expanded from 37 to 40 Lua-backed tests (run `python -m unittest discover -s Tools/tests`). Standalone public [test plan](Docs/TEST_PLAN.md) checkboxes remain open for verification in a clean public install.

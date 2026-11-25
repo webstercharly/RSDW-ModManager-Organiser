@@ -6,7 +6,7 @@ local engine = require("rlm_engine")
 local log = require("rlm_log")
 local store = require("rlm_store")
 
-local M = { VERSION = "0.3.3" }
+local M = { VERSION = "0.3.4" }
 
 local NAME_LIMIT = 16
 local PAGE_ITEMS, PAGE_RUNES, PAGE_AMMO = 1, 2, 3
@@ -104,6 +104,28 @@ local DEFAULT_SETTINGS = {
 
 -- Document access -------------------------------------------------------------
 
+local NON_STORAGE_PATTERNS = {
+    "bp_station", "rack", "caperack", "weaponrack", "armourrack",
+    "armorstand", "armourstand", "pedestal", "trophy", "display",
+    "mannequin", "smelter", "furnace", "anvil", "forge", "kiln",
+    "sawmill", "cooking", "grill", "cauldron", "altar", "tanner",
+    "loom", "spinning", "workbench", "craftingstation", "grindstone",
+    "fermentation", "planter", "trough", "compost", "gravestone",
+    "campfire", "bed", "throne", "chair", "sign", "lantern",
+    "torch", "brazier", "portal", "lodestone", "totem", "obelisk",
+}
+
+local function matches_non_storage_name(name)
+    local lower = tostring(name or ""):lower()
+    if lower == "" then return false end
+    for _, pat in ipairs(NON_STORAGE_PATTERNS) do
+        if lower:find(pat, 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
 local function trim(text)
     return (tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", ""))
 end
@@ -119,7 +141,16 @@ local function organiser_document()
             if org.settings[k] == nil then org.settings[k] = v end
         end
     end
-    if type(org.labels) ~= "table" then org.labels = {} end
+    if type(org.labels) ~= "table" then
+        org.labels = {}
+    else
+        for idx = #org.labels, 1, -1 do
+            local entry = org.labels[idx]
+            if type(entry) ~= "table" or matches_non_storage_name(entry.name) then
+                table.remove(org.labels, idx)
+            end
+        end
+    end
     if type(org.locks) ~= "table" then org.locks = {} end
     return org
 end
@@ -265,9 +296,13 @@ function M.parse_label(label)
     return { kind = "item", value = text }
 end
 
-local COMPONENT_SUB_CATEGORIES = {
-    bone = true, hide = true, leather = true, thread = true,
-    cloth = true, gem = true, seed = true,
+local BROAD_CATCHALL_CATEGORIES = {
+    resource = true,
+    consumable = true,
+    basic = true,
+    processed = true,
+    special = true,
+    component = true,
 }
 
 function M.rule_score(rule, item_info, target_items)
@@ -280,18 +315,19 @@ function M.rule_score(rule, item_info, target_items)
     end
     if rule.kind == "cat" then
         local wanted = rule.value:lower()
-        local has_sub = false
-        if wanted == "component" then
-            for _, category_name in ipairs(item_info.categories or {}) do
-                if COMPONENT_SUB_CATEGORIES[category_name:lower()] then
-                    has_sub = true
-                    break
-                end
+        local has_specific = false
+        for _, category_name in ipairs(item_info.categories or {}) do
+            if not BROAD_CATCHALL_CATEGORIES[category_name:lower()] then
+                has_specific = true
+                break
             end
         end
         for _, category_name in ipairs(item_info.categories or {}) do
             if category_name:lower() == wanted then
-                return has_sub and 1.5 or 2
+                if BROAD_CATCHALL_CATEGORIES[wanted] and has_specific then
+                    return 1.5
+                end
+                return 2
             end
         end
         local theme_cats = THEME_FALLBACK_CATEGORIES[wanted]
@@ -376,6 +412,31 @@ local function has_word_token(text, kw)
         or text:find("%f[%a]" .. kw .. "es%f[%A]") ~= nil
 end
 
+local SKIP_CRAFT_INFERENCE = {
+    weapon = true, shield = true, armour = true, jewellery = true,
+    cape = true, tool = true, ammo = true, potion = true,
+    food = true, drink = true, tome = true, plan = true,
+    pattern = true, vestige = true, whetstone = true, quest = true,
+    ["raw fish"] = true, ["prime fish"] = true,
+}
+
+local CRAFT_INFERENCE_RULES = {
+    { "Ore", { "ore" } },
+    { "Metal", { "bar", "ingot", "spike", "rivet" } },
+    { "Mineral", { "stone", "gypsum", "sandstone", "clay", "limestone", "granite", "obsidian", "coal", "charcoal", "flint", "salt", "sulphur", "sulfur", "lime" } },
+    { "Wood", { "log", "plank", "timber", "bark" } },
+    { "Leather", { "leather" } },
+    { "Hide", { "pelt", "hide", "fur", "fleece" } },
+    { "Thread", { "thread", "yarn", "twine", "wool", "string", "cord" } },
+    { "Cloth", { "cloth", "linen", "silk", "fabric" } },
+    { "Bone", { "bone", "skull", "spine", "horn", "antler", "fang", "claw", "tusk", "talon", "feather", "chitin", "carapace" } },
+    { "Herb", { "herb", "flower", "leaf", "leaves", "moss", "root", "spore", "flax", "marigold", "harralander", "bitterweed", "vervain" } },
+    { "Seed", { "seed" } },
+    { "Gem", { "gem", "crystal", "amber", "quartz", "sapphire", "emerald", "ruby", "diamond" } },
+    { "Essence", { "essence", "anima", "ember", "ether", "core", "dust", "ash", "ashes" } },
+    { "Ingredient", { "flour", "sugar", "egg", "butter", "milk", "cream", "honey", "spice", "meat", "steak" } },
+}
+
 local function infer_categories_from_identity(id, name, cats)
     local id_l = tostring(id or ""):lower()
     local n_l = tostring(name or ""):lower()
@@ -408,37 +469,28 @@ local function infer_categories_from_identity(id, name, cats)
         end
     end
 
-    if id_l:find("^item_resources_") or id_l:find("^item_rune_") or #cats == 0 then
-        if has_word_token(n_l, "leather") or has_word_token(id_words, "leather") then
-            append_unique_cat(cats, "Leather")
-        elseif has_word_token(n_l, "pelt") or has_word_token(n_l, "hide") or has_word_token(n_l, "fur")
-            or has_word_token(n_l, "fleece") then
-            append_unique_cat(cats, "Hide")
-        elseif has_word_token(n_l, "thread") or has_word_token(n_l, "yarn") or has_word_token(n_l, "twine")
-            or has_word_token(n_l, "wool") or has_word_token(id_words, "thread") then
-            append_unique_cat(cats, "Thread")
-        elseif has_word_token(n_l, "cloth") or has_word_token(n_l, "linen") or has_word_token(n_l, "silk")
-            or has_word_token(n_l, "fabric") then
-            append_unique_cat(cats, "Cloth")
-        elseif has_word_token(n_l, "bar") or has_word_token(n_l, "ingot")
-            or has_word_token(id_words, "bar") then
-            append_unique_cat(cats, "Metal")
-        elseif has_word_token(n_l, "bone") or has_word_token(n_l, "skull") or has_word_token(n_l, "spine")
-            or has_word_token(n_l, "horn") or has_word_token(n_l, "antler") or has_word_token(n_l, "fang")
-            or has_word_token(n_l, "claw") then
-            append_unique_cat(cats, "Bone")
-        elseif has_word_token(n_l, "herb") or has_word_token(n_l, "flax") or has_word_token(n_l, "marigold")
-            or has_word_token(n_l, "harralander") or has_word_token(n_l, "bitterweed") or has_word_token(n_l, "vervain") then
-            append_unique_cat(cats, "Herb")
-        elseif has_word_token(n_l, "gem") or has_word_token(n_l, "crystal") or has_word_token(n_l, "amber")
-            or has_word_token(n_l, "quartz") or has_word_token(n_l, "sapphire") or has_word_token(n_l, "emerald")
-            or has_word_token(n_l, "ruby") then
-            append_unique_cat(cats, "Gem")
-        elseif has_word_token(n_l, "essence") or has_word_token(n_l, "anima")
-            or (has_word_token(n_l, "shard") and has_word_token(n_l, "vault")) then
-            append_unique_cat(cats, "Essence")
-        elseif id_l:find("^item_rune_") or (has_word_token(n_l, "rune") and not has_word_token(n_l, "stone")) then
-            append_unique_cat(cats, "Rune")
+    for _, existing in ipairs(cats) do
+        if SKIP_CRAFT_INFERENCE[existing:lower()] then
+            return
+        end
+    end
+
+    if id_l:find("^item_rune_") or (has_word_token(n_l, "rune") and not has_word_token(n_l, "stone")) then
+        append_unique_cat(cats, "Rune")
+        return
+    end
+    if has_word_token(n_l, "shard") and has_word_token(n_l, "vault") then
+        append_unique_cat(cats, "Essence")
+        return
+    end
+
+    for _, rule in ipairs(CRAFT_INFERENCE_RULES) do
+        local cat_name, kws = rule[1], rule[2]
+        for _, kw in ipairs(kws) do
+            if has_word_token(n_l, kw) or has_word_token(id_words, kw) then
+                append_unique_cat(cats, cat_name)
+                return
+            end
         end
     end
 end
@@ -528,16 +580,6 @@ end
 
 -- Storage Identification & Labelling ------------------------------------------
 
-local NON_STORAGE_PATTERNS = {
-    "smelter", "furnace", "anvil", "forge", "kiln", "sawmill",
-    "cooking", "grill", "cauldron", "altar", "tanner", "loom",
-    "spinning", "workbench", "craftingstation", "grindstone",
-    "fermentation", "planter", "trough", "compost", "gravestone",
-    "campfire", "bed", "throne", "chair", "sign", "lantern",
-    "torch", "brazier", "portal", "lodestone", "totem", "obelisk",
-    "mannequin", "armourstand", "armorstand", "display",
-}
-
 local function is_remote_client()
     if type(engine.local_generation_allowed) == "function" then
         local allowed, mode = engine.local_generation_allowed()
@@ -555,7 +597,59 @@ local function has_world_linked_storage()
     return engine.is_valid(c) and not is_default_object(c)
 end
 
-local function is_built_storage(actor, settings)
+local function guid_fields_equal(a, b)
+    if not a or not b then return false end
+    local aa, ab, ac, ad = safe_call(function() return a.A end), safe_call(function() return a.B end),
+        safe_call(function() return a.C end), safe_call(function() return a.D end)
+    local ba, bb, bc, bd = safe_call(function() return b.A end), safe_call(function() return b.B end),
+        safe_call(function() return b.C end), safe_call(function() return b.D end)
+    if aa ~= nil and ba ~= nil then
+        return aa == ba and ab == bb and ac == bc and ad == bd
+    end
+    return tostring(a) == tostring(b)
+end
+
+local function is_private_locked_from_local(ownership)
+    if not engine.is_valid(ownership) then return false end
+    if safe_call(function() return ownership.bIsPrivatelyOwned end, false) ~= true then
+        return false
+    end
+
+    local controller = engine.local_controller()
+    if not engine.is_valid(controller) then return true end
+
+    local my_guid = safe_call(function() return controller:GetCharacterGuid() end)
+    if my_guid then
+        local locked_from_me = safe_call(function() return ownership:IsPrivatelyLockedFromPlayer(my_guid) end)
+        if type(locked_from_me) == "boolean" then
+            return locked_from_me
+        end
+        local owned_by_me = safe_call(function() return ownership:IsOwnedBy(my_guid) end)
+        if type(owned_by_me) == "boolean" then
+            return not owned_by_me
+        end
+        local owner_guid = safe_call(function() return ownership:GetOwningCharacterGuid() end)
+        if owner_guid then
+            local eq = safe_call(function() return controller:IsCharacterGuidEqual(owner_guid) end)
+            if type(eq) == "boolean" then
+                return not eq
+            end
+            if guid_fields_equal(my_guid, owner_guid) then
+                return false
+            end
+        end
+    end
+
+    local my_pid = to_string_value(safe_call(function() return controller:GetPlayerId() end))
+    local own_pid = to_string_value(safe_call(function() return ownership.OwningPlayerId end))
+    if my_pid and my_pid ~= "" and own_pid and own_pid ~= "" then
+        return my_pid ~= own_pid
+    end
+
+    return true
+end
+
+local function is_built_storage(actor, settings, opts)
     if not engine.is_valid(actor) or is_default_object(actor) then return false end
     if not engine.is_valid(base_building_class) then
         base_building_class = safe_call(function() return StaticFindObject("/Script/Dominion.BaseBuildingActor") end)
@@ -566,10 +660,8 @@ local function is_built_storage(actor, settings)
     end
 
     local full_lower = safe_call(function() return actor:GetFullName() end, ""):lower()
-    for _, pat in ipairs(NON_STORAGE_PATTERNS) do
-        if full_lower:find(pat, 1, true) then
-            return false
-        end
+    if matches_non_storage_name(full_lower) then
+        return false
     end
 
     local linked = safe_call(function() return actor.LinkedInventoryComponent end)
@@ -585,23 +677,11 @@ local function is_built_storage(actor, settings)
         end
     end
 
-    if is_remote_client() then
+    local allow_private = type(opts) == "table" and opts.allow_private == true
+    if is_remote_client() and not allow_private then
         local ownership = safe_call(function() return actor.OwnershipComponent end)
-        if engine.is_valid(ownership) and safe_call(function() return ownership.bIsPrivatelyOwned end, false) == true then
-            local controller = engine.local_controller()
-            local my_guid = engine.is_valid(controller) and safe_call(function() return controller:GetCharacterGuid() end) or nil
-            local locked_from_me = my_guid and safe_call(function() return ownership:IsPrivatelyLockedFromPlayer(my_guid) end)
-            if locked_from_me == nil and my_guid and type(ownership.IsOwnedBy) == "function" then
-                local owned_by_me = safe_call(function() return ownership:IsOwnedBy(my_guid) end)
-                if owned_by_me == true then
-                    locked_from_me = false
-                elseif owned_by_me == false then
-                    locked_from_me = true
-                end
-            end
-            if locked_from_me ~= false then
-                return false
-            end
+        if is_private_locked_from_local(ownership) then
+            return false
         end
     end
 
@@ -684,9 +764,22 @@ local function storage_from_api(api)
         inv = safe_call(function() return api.InventoryComponent end)
     end
     if not engine.is_valid(inv) then return nil end
+    local controller = engine.local_controller()
+    local player_inv = engine.is_valid(controller) and safe_call(function() return controller.InventoryComponent end) or nil
+    if player_inv and inv == player_inv then return nil end
     local actor = safe_call(function() return inv:GetOwner() end)
-    if is_built_storage(actor) then return inv, actor end
-    return nil
+    if not engine.is_valid(actor) or is_default_object(actor) then return nil end
+    if not engine.is_valid(base_building_class) then
+        base_building_class = safe_call(function() return StaticFindObject("/Script/Dominion.BaseBuildingActor") end)
+    end
+    if engine.is_valid(base_building_class)
+        and safe_call(function() return actor:IsA(base_building_class) end) ~= true then
+        return nil
+    end
+    if matches_non_storage_name(safe_call(function() return actor:GetFullName() end, "")) then
+        return nil
+    end
+    return inv, actor
 end
 
 function M.open_storage()
@@ -694,8 +787,9 @@ function M.open_storage()
 
     -- Prefer live activated WorldActorInventoryMainPanel when available so pooled/closed UIAPIs do not trigger false positives
     local live_panel_count = 0
+    local fallback_hit = nil
     local panels = safe_call(function() return FindAllOf("WorldActorInventoryMainPanel") end, {})
-    for _, panel in ipairs(panels) do
+    for _, panel in pairs(panels) do
         if engine.is_valid(panel) and not is_default_object(panel) then
             live_panel_count = live_panel_count + 1
             local active = safe_call(function() return panel:IsActivated() end)
@@ -703,12 +797,20 @@ function M.open_storage()
                 active = safe_call(function() return panel.bIsActive end)
             end
             local visible = safe_call(function() return panel:IsVisible() end)
-            if active == true or visible == true then
+            if active == true then
                 local api = safe_call(function() return panel.WorldInventoryManagerAPI end)
                 local inv, actor = storage_from_api(api)
                 if inv then return inv, actor, api, panel end
+            elseif visible == true and not fallback_hit then
+                local api = safe_call(function() return panel.WorldInventoryManagerAPI end)
+                local inv, actor = storage_from_api(api)
+                if inv then fallback_hit = { inv, actor, api, panel } end
             end
         end
+    end
+
+    if fallback_hit then
+        return fallback_hit[1], fallback_hit[2], fallback_hit[3], fallback_hit[4]
     end
 
     if live_panel_count > 0 then
@@ -2171,13 +2273,18 @@ local SUB_CATEGORY_ROLES = {
     { id = "sub_essence",   label = "All: Essence",   category = "Essence",   station_theme = "magic",     min_stacks = 2 },
     { id = "sub_rune",      label = "All: Rune",      category = "Rune",      station_theme = "magic",     min_stacks = 2 },
     { id = "sub_gem",       label = "All: Gem",       category = "Gem",       station_theme = "ores",      min_stacks = 2 },
-    { id = "sub_weapon",    label = "All: Weapon",    category = "Weapon",    station_theme = "equipment", min_stacks = 2 },
-    { id = "sub_armour",    label = "All: Armour",    category = "Armour",    station_theme = "equipment", min_stacks = 2 },
-    { id = "sub_jewellery", label = "All: Jewellery", category = "Jewellery", station_theme = "equipment", min_stacks = 2 },
-    { id = "sub_tool",      label = "All: Tool",      category = "Tool",      station_theme = "equipment", min_stacks = 2 },
-    { id = "sub_ammo",      label = "All: Ammo",      category = "Ammo",      station_theme = "equipment", min_stacks = 2 },
-    { id = "sub_raw_fish",  label = "All: Raw Fish",  category = "Raw Fish",  station_theme = "food",      min_stacks = 2 },
-    { id = "sub_drink",     label = "All: Drink",     category = "Drink",     station_theme = "food",      min_stacks = 2 },
+    { id = "sub_weapon",     label = "All: Weapon",     category = "Weapon",     station_theme = "equipment", min_stacks = 2 },
+    { id = "sub_armour",     label = "All: Armour",     category = "Armour",     station_theme = "equipment", min_stacks = 2 },
+    { id = "sub_shield",     label = "All: Shield",     category = "Shield",     station_theme = "equipment", min_stacks = 2 },
+    { id = "sub_cape",       label = "All: Cape",       category = "Cape",       station_theme = "equipment", min_stacks = 2 },
+    { id = "sub_jewellery",  label = "All: Jewellery",  category = "Jewellery",  station_theme = "equipment", min_stacks = 2 },
+    { id = "sub_tool",       label = "All: Tool",       category = "Tool",       station_theme = "equipment", min_stacks = 2 },
+    { id = "sub_ammo",       label = "All: Ammo",       category = "Ammo",       station_theme = "equipment", min_stacks = 2 },
+    { id = "sub_tome",       label = "All: Tome",       category = "Tome",       station_theme = "magic",     min_stacks = 2 },
+    { id = "sub_ingredient", label = "All: Ingredient", category = "Ingredient", station_theme = "food",      min_stacks = 2 },
+    { id = "sub_raw_fish",   label = "All: Raw Fish",   category = "Raw Fish",   station_theme = "food",      min_stacks = 2 },
+    { id = "sub_prime_fish", label = "All: Prime Fish", category = "Prime Fish", station_theme = "food",      min_stacks = 2 },
+    { id = "sub_drink",      label = "All: Drink",      category = "Drink",      station_theme = "food",      min_stacks = 2 },
 }
 
 function M.plan_base_roles(all_chests, workstations, opts)
@@ -2311,7 +2418,14 @@ function M.plan_base_roles(all_chests, workstations, opts)
         }
     end
 
-    -- Pass 1: Core coarse bank themes
+    -- Pass 1: Active core coarse bank themes (demand > 0 or matching nearby workstation)
+    local active_station_themes = {}
+    for _, ws in ipairs(workstations) do
+        if ws.theme and ws.theme.id then
+            active_station_themes[ws.theme.id] = true
+        end
+    end
+
     local theme_requests = {}
     for _, theme in ipairs(BANK_THEMES) do
         local demand = 0
@@ -2321,14 +2435,23 @@ function M.plan_base_roles(all_chests, workstations, opts)
             cat_set[tcl] = true
             demand = demand + (cat_demand[tcl] or 0)
         end
-        theme_requests[#theme_requests + 1] = { theme = theme, demand = demand, cat_set = cat_set }
+        theme_requests[#theme_requests + 1] = {
+            theme = theme,
+            demand = demand,
+            cat_set = cat_set,
+            has_station = active_station_themes[theme.id] == true,
+        }
     end
-    table.sort(theme_requests, function(a, b) return a.demand > b.demand end)
+    table.sort(theme_requests, function(a, b)
+        if a.demand ~= b.demand then return a.demand > b.demand end
+        if a.has_station ~= b.has_station then return a.has_station end
+        return a.theme.id < b.theme.id
+    end)
 
     for _, req in ipairs(theme_requests) do
         if #available == 0 then break end
         local low = req.theme.label:lower()
-        if (role_counts[low] or 0) == 0 then
+        if (role_counts[low] or 0) == 0 and (req.demand > 0 or req.has_station) then
             local chest = pick_best_chest(req.cat_set, req.theme.id, nil)
             if chest then
                 assign_chest(chest, req.theme.label, 1, "Core bank role")
@@ -2362,15 +2485,17 @@ function M.plan_base_roles(all_chests, workstations, opts)
         end
     end
 
-    -- Pass 3 (Granular): Bulk single-item chests (>= 3 stacks) & overflow capacity splits
-    if tier == "granular" and #available > 0 then
+    -- Pass 3 (Proportional Bulk & Overflow): Once base has 8+ chests and spare capacity,
+    -- promote heavy bulk items (>= 3 stacks at 14+, >= 4 at 8..13) and add overflow chests above 75% load.
+    if tier ~= "starter" and #available > 0 then
+        local bulk_threshold = (eligible_count >= 14) and 3 or 4
         table.sort(item_list, function(a, b)
             if a.stacks ~= b.stacks then return a.stacks > b.stacks end
             return a.name:lower() < b.name:lower()
         end)
         for _, rec in ipairs(item_list) do
             if #available == 0 then break end
-            if rec.stacks >= 3 and #rec.name <= NAME_LIMIT then
+            if rec.stacks >= bulk_threshold and #rec.name <= NAME_LIMIT then
                 local low = rec.name:lower()
                 if (role_counts[low] or 0) == 0 and not low:find("^all:") and low ~= "misc" and low ~= "trash" then
                     local chest = pick_best_chest(nil, nil, rec.name)
@@ -2381,11 +2506,25 @@ function M.plan_base_roles(all_chests, workstations, opts)
             end
         end
 
+        for _, sub in ipairs(SUB_CATEGORY_ROLES) do
+            if #available == 0 then break end
+            local low = sub.label:lower()
+            local demand = cat_demand[sub.category:lower()] or 0
+            local cap = role_capacity[low] or 0
+            if cap > 0 and demand > math.floor(cap * 0.75) and (role_counts[low] or 0) < 4 then
+                local chest = pick_best_chest({ [sub.category:lower()] = true }, sub.station_theme, nil)
+                if chest then
+                    assign_chest(chest, sub.label, 3,
+                        string.format("Overflow capacity (%d/%d slots demanded)", demand, cap))
+                end
+            end
+        end
+
         for _, req in ipairs(theme_requests) do
             if #available == 0 then break end
             local low = req.theme.label:lower()
             local cap = role_capacity[low] or 0
-            if cap > 0 and req.demand > math.floor(cap * 0.8) and (role_counts[low] or 0) < 4 then
+            if cap > 0 and req.demand > math.floor(cap * 0.75) and (role_counts[low] or 0) < 4 then
                 local chest = pick_best_chest(req.cat_set, req.theme.id, nil)
                 if chest then
                     assign_chest(chest, req.theme.label, 3,
@@ -2395,7 +2534,18 @@ function M.plan_base_roles(all_chests, workstations, opts)
         end
     end
 
-    -- Pass 4: Reserve one catch-all Misc chest if none exists yet
+    -- Pass 4: Fill any remaining 0-demand core themes if chests remain, plus at most one catch-all Misc chest
+    for _, req in ipairs(theme_requests) do
+        if #available == 0 then break end
+        local low = req.theme.label:lower()
+        if (role_counts[low] or 0) == 0 then
+            local chest = pick_best_chest(req.cat_set, req.theme.id, nil)
+            if chest then
+                assign_chest(chest, req.theme.label, 1, "Core bank role")
+            end
+        end
+    end
+
     if #available > 0 and (role_counts["misc"] or 0) == 0 then
         local chest = pick_best_chest(nil, nil, nil)
         if chest then

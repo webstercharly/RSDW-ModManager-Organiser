@@ -124,7 +124,7 @@ class OrganiserManifestTests(unittest.TestCase):
         self.assertIn("label", action_ids)
         self.assertIn("lock", action_ids)
         self.assertIn("trash", action_ids)
-        self.assertEqual(manifest["version"], "0.3.3")
+        self.assertEqual(manifest["version"], "0.3.4")
 
 @unittest.skipIf(LuaRuntime is None, "lupa is not installed")
 class OrganiserServiceTests(unittest.TestCase):
@@ -1382,6 +1382,341 @@ class OrganiserServiceTests(unittest.TestCase):
         self.assertIn("All: Wood", suggestions[:8])
         self.assertIn("Misc", suggestions[:10])
         self.assertGreater(suggestions.index("Ash Logs"), suggestions.index("All: Ore"))
+
+    def test_audit_fixes_multi_category_scoring_non_storage_prune_and_demand_first_planning(self):
+        self.lua.execute(r"""
+        local org = organiser_service
+        -- 1. Broad crafting catch-alls (Component/Basic/Processed/Special) yield (1.5 vs 2)
+        --    to ANY specific category (Herb, Essence, Metal), even with multiple categories
+        local herb_with_comp = { id = "ITEM_Botanical_Harralander", name = "Harralander", categories = { "Basic", "Component", "Herb" } }
+        _G.__SCORE_HERB = org.rule_score(org.parse_label("All: Herb"), herb_with_comp)
+        _G.__SCORE_HERB_COMP = org.rule_score(org.parse_label("All: Component"), herb_with_comp)
+        local pure_comp = { id = "ITEM_Gear_Part", name = "Brass Gear", categories = { "Component" } }
+        _G.__SCORE_PURE_COMP = org.rule_score(org.parse_label("All: Component"), pure_comp)
+
+        -- 2. Non-storage actors (CapeRack, WeaponRack, BP_Station_*) are filtered out of all_storage_in_reach
+        --    and pruned from saved organiser labels
+        local doc = package.loaded.rlm_store.get("organiser")
+        doc.labels = {
+            { name = "BP_BaseBuilding_CapeRack_C_1", label = "All: Ore", x = 10, y = 0, z = 0 },
+            { name = "BP_Station_Spinning_Wheel_C_2", label = "All: Wood", x = 20, y = 0, z = 0 },
+            { name = "BP_BaseBuilding_Chest_Iron_C_3", label = "All: Component", x = 30, y = 0, z = 0 },
+        }
+        package.loaded.rlm_engine.local_generation_allowed = function() return false, "RemoteClient" end
+        local caperack = {
+            GetAddress = function() return 501 end,
+            GetFullName = function() return "BP_BaseBuilding_CapeRack_C_501" end,
+            IsA = is_base_building,
+            K2_GetActorLocation = function() return { X = 100, Y = 0, Z = 0 } end,
+            LinkedInventoryComponent = { IsValid = function() return true end, bIsLocked = false },
+        }
+        local weaponrack = {
+            GetAddress = function() return 502 end,
+            GetFullName = function() return "BP_BaseBuilding_WeaponRack_C_502" end,
+            IsA = is_base_building,
+            K2_GetActorLocation = function() return { X = 150, Y = 0, Z = 0 } end,
+            LinkedInventoryComponent = { IsValid = function() return true end, bIsLocked = false },
+        }
+        local real_chest = {
+            GetAddress = function() return 503 end,
+            GetFullName = function() return "BP_BaseBuilding_Chest_Iron_C_503" end,
+            IsA = is_base_building,
+            K2_GetActorLocation = function() return { X = 200, Y = 0, Z = 0 } end,
+            LinkedInventoryComponent = { IsValid = function() return true end, bIsLocked = false },
+        }
+        _G.FindFirstOf = function(cls)
+            if cls == "LinkedInventoryComponent" then return real_chest.LinkedInventoryComponent end
+            return nil
+        end
+        _G.FindAllOf = function(cls)
+            if cls == "InventoryComponent" then
+                return {
+                    { GetOwner = function() return caperack end, MaxSlotCount = 1, ItemSlots = { ForEach = function() end } },
+                    { GetOwner = function() return weaponrack end, MaxSlotCount = 1, ItemSlots = { ForEach = function() end } },
+                    { GetOwner = function() return real_chest end, MaxSlotCount = 64, ItemSlots = { ForEach = function() end } },
+                }
+            end
+            return {}
+        end
+        _G.__FILTERED_CHESTS = org.all_storage_in_reach({ X = 0, Y = 0, Z = 0 }, { rangeMeters = 40, anyStorage = true })
+
+        -- Force settings prune via M.locks() -> organiser_document()
+        org.locks()
+        _G.__AFTER_PRUNE_LEN = #doc.labels
+
+        -- 3. Non-ITEM_Resources_* items still infer material categories when tagged BasicMaterial
+        local mock_inv = {
+            ItemSlots = { ForEach = function(_, fn)
+                local item = {
+                    Count = 10,
+                    ItemData = {
+                        Name = { ToString = function() return "Supple Leather" end },
+                        MaxStackSize = 50,
+                        GetFName = function() return { ToString = function() return "ITEM_Craft_SuppleLeather" end } end,
+                        ItemFilterTags = { GameplayTags = { ForEach = function(_, f)
+                            f(nil, { get = function() return { TagName = { ToString = function() return "ItemFilter.Material.BasicMaterial" end } } end })
+                        end } },
+                    }
+                }
+                fn(1, { get = function() return item end })
+            end },
+        }
+        _G.__INFERRED_SLOTS = org.read_slots(mock_inv)
+
+        -- 4. Demand-first planning on a 9-chest base skips empty zero-demand themes when tight
+        local function mkchest(i, slots, cap)
+            return { pos = { X = i * 100, Y = 0, Z = 0 }, d2 = i * i * 10000, slots = slots or {}, maxSlots = cap or 20 }
+        end
+        local slots_metal = {}
+        for k = 1, 2 do slots_metal[#slots_metal + 1] = { id = "ITEM_Bar", name = "Mithril Bar", categories = { "Component", "Metal" } } end
+        for k = 1, 2 do slots_metal[#slots_metal + 1] = { id = "ITEM_Herb", name = "Harralander", categories = { "Basic", "Herb" } } end
+        local tight_base = {}
+        tight_base[1] = mkchest(1, slots_metal)
+        for i = 2, 8 do tight_base[i] = mkchest(i, {}) end
+        _G.__PLAN_TIGHT = org.plan_base_roles(tight_base, {})
+        """)
+        self.assertEqual(self.lua.eval("_G.__SCORE_HERB"), 2)
+        self.assertEqual(self.lua.eval("_G.__SCORE_HERB_COMP"), 1.5)
+        self.assertEqual(self.lua.eval("_G.__SCORE_PURE_COMP"), 2)
+
+        chests = list(self.lua.eval("_G.__FILTERED_CHESTS").values())
+        self.assertEqual(len(chests), 1)
+        self.assertEqual(chests[0]["actor"].GetAddress(), 503)
+        self.assertEqual(self.lua.eval("_G.__AFTER_PRUNE_LEN"), 1)
+
+        inferred_cats = list(self.lua.eval("_G.__INFERRED_SLOTS")[1]["categories"].values())
+        self.assertIn("Basic", inferred_cats)
+        self.assertIn("Leather", inferred_cats)
+
+        tight_labels = [a["label"] for a in self.lua.eval("_G.__PLAN_TIGHT")["assignments"].values()]
+        self.assertIn("All: Metal", tight_labels)
+        self.assertIn("All: Herb", tight_labels)
+        self.assertEqual(len(tight_labels), 8)
+
+    def test_open_storage_handles_private_chest_and_hud_ignores_inactive_station_panel(self):
+        self.lua.execute(r"""
+        package.loaded.rlm_engine.local_generation_allowed = function()
+            return false, "RemoteClient"
+        end
+        package.loaded.rlm_engine.local_controller = function()
+            return {
+                IsValid = function() return true end,
+                GetPlayerId = function() return "PLAYER_LOCAL" end,
+                GetCharacterGuid = function() return { A = 1, B = 2, C = 3, D = 4 } end,
+            }
+        end
+
+        local priv_actor = {
+            GetAddress = function() return 601 end,
+            GetFullName = function() return "BP_BaseBuilding_Chest_Iron_C_601" end,
+            IsA = is_base_building,
+            K2_GetActorLocation = function() return { X = 100, Y = 0, Z = 0 } end,
+            LinkedInventoryComponent = { IsValid = function() return true end, bIsLocked = false },
+            OwnershipComponent = {
+                IsValid = function() return true end,
+                bIsPrivatelyOwned = true,
+                OwningPlayerId = "PLAYER_LOCAL",
+            },
+        }
+        local priv_inv = {
+            GetOwner = function() return priv_actor end,
+            MaxSlotCount = 20,
+            ItemSlots = { ForEach = function() end },
+        }
+        local open_panel = {
+            GetFullName = function() return "WBP_WorldActorInventory_MainPanel_C_601" end,
+            IsActivated = function() return true end,
+            IsVisible = function() return true end,
+            WorldInventoryManagerAPI = {
+                GetInventoryComponent = function() return priv_inv end,
+                IsInitialized = function() return true end,
+            },
+        }
+        _G.FindAllOf = function(cls)
+            if cls == "WorldActorInventoryMainPanel" then return { open_panel } end
+            if cls == "InventoryComponent" then return { priv_inv } end
+            return {}
+        end
+        _G.FindFirstOf = function(cls)
+            if cls == "LinkedInventoryComponent" then return priv_actor.LinkedInventoryComponent end
+            return nil
+        end
+        local org = organiser_service
+        local inv, actor, api, panel = org.open_storage()
+        _G.__OPEN_OK = (inv == priv_inv) and (actor == priv_actor) and (panel == open_panel)
+        _G.__REACH_COUNT = #org.all_storage_in_reach({ X = 0, Y = 0, Z = 0 }, { rangeMeters = 40, anyStorage = true })
+        """)
+        self.assertTrue(self.lua.eval("_G.__OPEN_OK"))
+        self.assertEqual(self.lua.eval("_G.__REACH_COUNT"), 1)
+
+    def test_open_storage_fallback_and_hud_async_backup_pump(self):
+        hud_source = (MODULE_DIR / "rlm_organiser_hud.lua").read_text(encoding="utf-8")
+        self.lua.execute(r"""
+        local player_inv = { _kind = "player", MaxSlotCount = 40 }
+        _G.__TEST_CONTROLLER = {
+            InventoryComponent = player_inv,
+            IsValid = function() return true end,
+        }
+        package.loaded.rlm_engine.local_controller = function() return _G.__TEST_CONTROLLER end
+
+        _G.StaticFindObject = function(path)
+            if path == "/Script/Dominion.BaseBuildingActor" then return nil end
+            return { _path = path, IsValid = function() return true end }
+        end
+
+        local station_actor = { GetFullName = function() return "BP_Station_Workbench_C_1" end }
+        local station_inv = { MaxSlotCount = 4, GetOwner = function() return station_actor end }
+        local player_actor = { GetFullName = function() return "BP_PlayerCharacter_C_1" end }
+        player_inv.GetOwner = function() return player_actor end
+
+        local chest_actor = {
+            GetAddress = function() return 901 end,
+            GetFullName = function() return "BP_BaseBuilding_Chest_C_901" end,
+            GetCustomName = function() return { ToString = function() return "Backup Chest" end } end,
+            K2_GetActorLocation = function() return { X = 0, Y = 0, Z = 0 } end,
+        }
+        local chest_inv = {
+            MaxSlotCount = 24,
+            GetOwner = function() return chest_actor end,
+            ItemSlots = { ForEach = function() end },
+        }
+
+        local stale_visible_panel = {
+            IsActivated = function() return false end,
+            IsVisible = function() return true end,
+            WorldInventoryManagerAPI = { GetInventoryComponent = function() return station_inv end },
+        }
+        local player_inv_panel = {
+            IsActivated = function() return true end,
+            IsVisible = function() return true end,
+            WorldInventoryManagerAPI = { GetInventoryComponent = function() return player_inv end },
+        }
+        local active_chest_panel = {
+            IsActivated = function() return true end,
+            IsVisible = function() return true end,
+            WorldInventoryManagerAPI = { GetInventoryComponent = function() return chest_inv end },
+        }
+
+        -- Visible station panel before active chest panel still resolves active chest even when BaseBuildingActor is nil
+        _G.FindAllOf = function(cls)
+            if cls == "WorldActorInventoryMainPanel" then
+                return { stale_visible_panel, player_inv_panel, active_chest_panel }
+            end
+            return {}
+        end
+        local org = organiser_service
+        local got_inv, got_actor, _, got_panel = org.open_storage()
+        _G.__OPEN_ACTIVE_OK = (got_inv == chest_inv) and (got_actor == chest_actor) and (got_panel == active_chest_panel)
+
+        -- Player inventory and non-storage actors are ignored when no chest panel is active
+        _G.FindAllOf = function(cls)
+            if cls == "WorldActorInventoryMainPanel" then
+                return { stale_visible_panel, player_inv_panel }
+            end
+            return {}
+        end
+        _G.__OPEN_FILTERED_NIL = (org.open_storage() == nil)
+
+        -- Restore active chest panel for HUD backup pump test
+        _G.FindAllOf = function(cls)
+            if cls == "WorldActorInventoryMainPanel" then return { active_chest_panel } end
+            return {}
+        end
+        local async_callbacks = {}
+        package.loaded.rlm_async = {
+            after = function(delay, fn)
+                async_callbacks[#async_callbacks + 1] = { delay = delay, fn = fn }
+                return true
+            end,
+        }
+        local function make_widget(kind)
+            return {
+                _cls = kind,
+                Font = { Size = 12 },
+                SetVisibility = function(self, v)
+                    self._vis = v
+                    if self._is_frame then _G.__BACKUP_HUD_VIS = v end
+                end,
+                GetChildrenCount = function() return 0 end,
+                GetClass = function(self) return { GetFName = function() return { ToString = function() return self._cls end } end } end,
+                AddChildToVerticalBox = function() return { SetPadding = function() end, SetHorizontalAlignment = function() end, SetVerticalAlignment = function() end } end,
+                AddChildToHorizontalBox = function() return { SetPadding = function() end, SetHorizontalAlignment = function() end, SetVerticalAlignment = function() end } end,
+                AddChildToOverlay = function() return { SetPadding = function() end, SetHorizontalAlignment = function() end, SetVerticalAlignment = function() end } end,
+                AddChild = function() return { SetPadding = function() end } end,
+                AddChildToCanvas = function() return { SetAutoSize = function() end, SetZOrder = function() end, SetAnchors = function() end, SetAlignment = function() end, SetPosition = function() end, SetSize = function() end } end,
+                SetText = function() end,
+                SetLabelText = function() end,
+                SetColorAndOpacity = function() end,
+                SetFont = function() end,
+                SetAutoWrapText = function() end,
+                SetWrapTextAt = function() end,
+                SetShadowOffset = function() end,
+                SetShadowColorAndOpacity = function() end,
+                SetIsSelectable = function() end,
+                SetShouldSelectUponReceivingFocus = function() end,
+                SetIsFocusable = function() end,
+                SetWidthOverride = function() end,
+                SetHeightOverride = function() end,
+                SetRenderOpacity = function() end,
+                RemoveFromParent = function() end,
+                GetFullName = function() return kind .. "_inst" end,
+            }
+        end
+        local frame_obj = make_widget("WBP_Panel_C")
+        frame_obj._is_frame = true
+        frame_obj.BackgroundPanel = make_widget("Image")
+        frame_obj.PanelContent = make_widget("Overlay")
+        frame_obj.WidgetTree = { RootWidget = make_widget("CanvasPanel") }
+        local wbl = {
+            Create = function(self, pc, cls)
+                local p = cls and cls._path or ""
+                if p:find("WBP_Panel", 1, true) then return frame_obj end
+                return make_widget("WBP_DomAllCapsButton")
+            end,
+        }
+        _G.StaticFindObject = function(path)
+            if path == "/Script/UMG.Default__WidgetBlueprintLibrary" then return wbl end
+            if path == "/Script/Dominion.BaseBuildingActor" then return nil end
+            return { _path = path, IsValid = function() return true end }
+        end
+        local host_canvas = make_widget("CanvasPanel")
+        local host_panel = make_widget("WBP_WorldActorInventory_MainPanel_C")
+        host_panel.WidgetTree = { RootWidget = host_canvas }
+        host_panel.IsActivated = function() return true end
+        host_panel.IsVisible = function() return true end
+        _G.StaticConstructObject = function(cls)
+            local p = cls and cls._path or ""
+            local k = p:match("([^.]+)$") or "Widget"
+            return make_widget(k)
+        end
+        _G.LoadAsset = function() end
+        _G.FText = function(s) return tostring(s) end
+        _G.LoopInGameThreadWithDelay = function() return true end
+        _G.FindFirstOf = function(cls)
+            if cls == "WBP_WorldActorInventory_MainPanel_C" then return host_panel end
+            return nil
+        end
+        _G.__RSDW_PUBLIC_ORGANISER_DOCK = nil
+        _G.__BACKUP_HUD_VIS = nil
+        _G.__ASYNC_CALLBACKS = async_callbacks
+        """)
+
+        hud = self.lua.globals().load(hud_source, "@rlm_organiser_hud.lua", "t")(self.organiser)
+        self.lua.execute(r"""
+        _G.__TMP_HUD = ...
+        _G.__TMP_HUD.start({})
+        for i = 1, 4 do
+            _G.__RSDW_PUBLIC_ORGANISER_DOCK.last_tick_at = os.clock() - 1.0
+            local cb = _G.__ASYNC_CALLBACKS[i]
+            if cb then cb.fn() end
+        end
+        _G.__ASYNC_CALLBACK_COUNT = #_G.__ASYNC_CALLBACKS
+        """, hud)
+
+        self.assertTrue(self.lua.eval("_G.__OPEN_ACTIVE_OK"))
+        self.assertTrue(self.lua.eval("_G.__OPEN_FILTERED_NIL"))
+        self.assertGreaterEqual(self.lua.eval("_G.__ASYNC_CALLBACK_COUNT"), 1)
+        self.assertEqual(self.lua.eval("_G.__BACKUP_HUD_VIS"), 0)
 
 
 if __name__ == "__main__":

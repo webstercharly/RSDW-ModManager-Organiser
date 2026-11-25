@@ -3,7 +3,7 @@
   "id": "organiser",
   "name": "Organiser",
   "description": "RuneScape-style base bank organiser: automatic bank-sorted chest roles, container slot sorting, multi-chest re-sorting, storage and workstation advisor, item retention locks, and trash incineration.",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "order": 25,
   "entry": "module.lua",
   "ui": {

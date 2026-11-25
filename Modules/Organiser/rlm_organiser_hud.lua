@@ -114,16 +114,51 @@ local function find_canvas(root)
     return nil
 end
 
-local function refresh_hosts()
+local function widget_is_active_or_visible(w)
+    if not valid(w) then return false end
+    local active = safe_call(function() return w:IsActivated() end)
+    if active == nil then
+        active = safe_call(function() return w.bIsActive end)
+    end
+    if active ~= nil then return active == true end
+    return safe_call(function() return w:IsVisible() end, false) == true
+end
+
+local function refresh_hosts(preferred_panel)
+    if valid(preferred_panel) then
+        local tree = safe_call(function() return preferred_panel.WidgetTree end)
+        local root = valid(tree) and safe_call(function() return tree.RootWidget end) or nil
+        if find_canvas(root) then
+            state.host = preferred_panel
+            return state.host
+        end
+    end
+
     local now = os.clock()
-    if valid(state.host) and valid(state.station) then return state.host end
-    if now < state.next_host_scan then return state.host end
-    state.next_host_scan = now + 3.0
+    if valid(state.host) and widget_is_active_or_visible(state.host) and valid(state.station) then
+        return state.host
+    end
+    if now < state.next_host_scan and valid(state.host) then return state.host end
+    state.next_host_scan = now + 1.5
 
     if not valid(state.station) then
         state.station = live_widget(STATION_CLASS)
     end
-    if not valid(state.host) then
+    local picked = nil
+    for _, cls in ipairs(HOST_CLASSES) do
+        local candidate = live_widget(cls)
+        if valid(candidate) and widget_is_active_or_visible(candidate) then
+            local tree = safe_call(function() return candidate.WidgetTree end)
+            local root = valid(tree) and safe_call(function() return tree.RootWidget end) or nil
+            if find_canvas(root) then
+                picked = candidate
+                break
+            end
+        end
+    end
+    if valid(picked) then
+        state.host = picked
+    elseif not valid(state.host) then
         for _, cls in ipairs(HOST_CLASSES) do
             local candidate = live_widget(cls)
             if valid(candidate) then
@@ -140,8 +175,10 @@ local function refresh_hosts()
 end
 
 local function station_is_visible()
-    if not valid(state.station) then return false end
-    return safe_call(function() return state.station:IsVisible() end, false) == true
+    if not valid(state.station) then
+        state.station = live_widget(STATION_CLASS)
+    end
+    return widget_is_active_or_visible(state.station)
 end
 
 local function hide_embers(frame)
@@ -514,11 +551,20 @@ local function run_click_action(action_id, inv, actor)
     refresh_contents(state.ui, inv, actor)
 end
 
+local function diag_once(key, msg)
+    if state.last_diag == key then return end
+    state.last_diag = key
+    if msg then log.info("Organiser HUD: " .. tostring(msg)) end
+end
+
 local function tick()
     if not state.started then return end
+    local driver = rawget(_G, "__RSDW_PUBLIC_ORGANISER_DOCK")
+    if type(driver) == "table" then driver.last_tick_at = os.clock() end
 
     local settings = organiser.settings()
     if settings.autoOpenOnStorage == false then
+        diag_once("disabled", "auto-open is OFF in settings")
         hide_panel()
         return
     end
@@ -530,17 +576,19 @@ local function tick()
     end
 
     if station_is_visible() then
+        diag_once("station", "suppressed while crafting station screen is open")
         hide_panel()
         return
     end
 
-    local inv, actor = organiser.open_storage()
+    local inv, actor, _, open_panel = organiser.open_storage()
     if not valid(inv) or not valid(actor) then
+        state.last_diag = nil
         hide_panel()
         return
     end
 
-    local host = refresh_hosts()
+    local host = refresh_hosts(open_panel)
     local hn = valid(host) and full_name(host) or "__viewport__"
 
     if state.stage == "broken" and state.host_name == hn then
@@ -548,6 +596,9 @@ local function tick()
     end
 
     if state.host_name ~= hn or not (state.ui and valid(state.ui.frame)) then
+        if state.ui and valid(state.ui.frame) then
+            pcall(function() state.ui.frame:RemoveFromParent() end)
+        end
         state.action_map = {}
         state.ui = nil
         local ui, err = build_frame(pc, host)
@@ -589,6 +640,9 @@ local function tick()
             if msg and msg ~= "" then state.status_message = msg end
         end
         pcall(function() state.ui.frame:SetVisibility(0) end)
+        diag_once("shown:" .. key, string.format("shown for %s (%s)",
+            organiser.label_of(actor) or "Unlabelled chest",
+            state.ui.viewport and "viewport" or ("docked:" .. tostring(hn))))
     end
 
     local clicked = state.pending_click
@@ -653,6 +707,7 @@ function M.start(bootstrap_state)
     state.started = true
     state.stage = "idle"
     state.pending_click = nil
+    state.last_diag = nil
 
     local driver = driver_table()
     driver.tick = function()
@@ -677,6 +732,23 @@ function M.start(bootstrap_state)
         end
     end
 
+    local async_started = false
+    local async_mod = package.loaded.rlm_async
+    if type(async_mod) == "table" and type(async_mod.after) == "function" then
+        driver.async_gen = (driver.async_gen or 0) + 1
+        local my_gen = driver.async_gen
+        local function async_pump()
+            local d = rawget(_G, "__RSDW_PUBLIC_ORGANISER_DOCK")
+            if not d or d.async_gen ~= my_gen or type(d.tick) ~= "function" then return end
+            -- Only step via rlm_async if the primary LoopInGameThreadWithDelay hasn't ticked recently
+            if (os.clock() - (d.last_tick_at or 0)) >= 0.40 then
+                d.tick()
+            end
+            async_mod.after(0.25, async_pump)
+        end
+        async_started = pcall(async_mod.after, 0.25, async_pump)
+    end
+
     if type(RegisterHook) == "function" and driver.click_hook_reg ~= RegisterHook then
         local ok = pcall(RegisterHook, "/Script/CommonUI.CommonButtonBase:HandleButtonClicked", function(self)
             local ok_n, name = pcall(function() return self:get():GetFullName() end)
@@ -688,7 +760,7 @@ function M.start(bootstrap_state)
         if ok then driver.click_hook_reg = RegisterHook end
     end
 
-    if not driver.started then
+    if not driver.started and not async_started then
         state.started = false
         driver.tick = nil
         driver.on_click = nil

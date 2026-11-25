@@ -5,7 +5,7 @@ local engine = require("rlm_engine")
 local log = require("rlm_log")
 local store = require("rlm_store")
 
-local M = { VERSION = "0.3.3" }
+local M = { VERSION = "0.3.4" }
 local source = debug.getinfo(1, "S").source
 local module_dir = assert(source:match("^@(.*)[/\\][^/\\]+$"), "Organiser module path is unavailable")
 local organiser = assert(loadfile(module_dir .. "/rlm_organiser.lua"))()
