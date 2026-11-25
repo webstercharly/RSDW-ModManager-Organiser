@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "id": "organiser",
+  "name": "Organiser",
+  "description": "RuneScape-style base bank organiser: automatic bank-sorted chest roles, container slot sorting, multi-chest re-sorting, storage and workstation advisor, item retention locks, and trash incineration.",
+  "version": "0.3.3",
+  "order": 25,
+  "entry": "module.lua",
+  "ui": {
+    "menuLabel": "ORGANISER",
+    "actions": [
+      {
+        "id": "auto-organise",
+        "label": "AUTO-ORGANISE BASE",
+        "requiresInput": false
+      },
+      {
+        "id": "deposit",
+        "label": "DEPOSIT BACKPACK",
+        "requiresInput": false
+      },
+      {
+        "id": "advisor",
+        "label": "BASE ADVISOR",
+        "requiresInput": false
+      },
+      {
+        "id": "sort-open",
+        "label": "SORT OPEN STORAGE",
+        "requiresInput": false
+      },
+      {
+        "id": "resort-nearby",
+        "label": "RESORT NEARBY CHESTS",
+        "requiresInput": false
+      },
+      {
+        "id": "label",
+        "label": "LABEL STORAGE",
+        "inputHint": "Label (Ash Logs, All: Wood, Misc, Trash, CLEAR)",
+        "requiresInput": true
+      },
+      {
+        "id": "lock",
+        "label": "SET LOCK",
+        "inputHint": "Keep count: all, 0 (unlock), 1, 5, 10, 20, 50",
+        "requiresInput": true
+      },
+      {
+        "id": "trash",
+        "label": "TOGGLE TRASH",
+        "requiresInput": false
+      }
+    ]
+  }
+}
