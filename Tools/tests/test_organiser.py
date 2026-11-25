@@ -1796,6 +1796,91 @@ class OrganiserServiceTests(unittest.TestCase):
         logs = [str(v) for v in self.t["logs"].values()]
         self.assertTrue(any("chest rename RPC failed" in entry for entry in logs))
 
+    def test_garou_chit_currency_routing_and_stale_native_label_precedence(self):
+        self.lua.execute(r"""
+        local org = organiser_service
+        local pc = {
+            IsValid = function() return true end,
+            Server_SetObjectCustomName = function() end,
+        }
+        _G.FText = function(s) return tostring(s) end
+
+        -- Chest starts natively named "Farming", and DedicatedServer never replicates the rename
+        local current_native = "Farming"
+        local chest1 = {
+            GetAddress = function() return 801 end,
+            GetFullName = function() return "BP_BaseBuilding_Chest_Iron_C_801" end,
+            IsA = is_base_building,
+            GetCustomName = function() return { ToString = function() return current_native end } end,
+            K2_GetActorLocation = function() return { X = 100, Y = 0, Z = 0 } end,
+        }
+
+        org.set_label(pc, chest1, "All: Herb")
+        _G.__LABEL_WHILE_STALE_NATIVE = org.label_of(chest1)
+
+        -- A subsequent manual rename in-game still takes precedence over stored label
+        current_native = "Player Override"
+        _G.__LABEL_AFTER_MANUAL_RENAME = org.label_of(chest1)
+
+        local function make_untagged_inv(id, name, count)
+            local data = {
+                IsValid = function() return true end,
+                GetFName = function() return { ToString = function() return id end } end,
+                Name = { ToString = function() return name end },
+                MaxStackSize = 99,
+            }
+            local item = {
+                IsValid = function() return true end,
+                ItemData = data,
+                Count = count,
+            }
+            return {
+                IsValid = function() return true end,
+                GetOwner = function() return chest1 end,
+                MaxSlotCount = 20,
+                ItemSlots = {
+                    ForEach = function(_, cb)
+                        cb(1, { get = function() return item end })
+                    end,
+                },
+            }
+        end
+
+        local chit_inv = make_untagged_inv("ITEM_Resources_Currency_Chit_Garou", "Garou Chit", 55)
+        local fallback_inv = make_untagged_inv("ITEM_Resources_Unknown_Relic", "Unknown Relic", 3)
+        _G.__CHIT_REC = org.recommend_chest_label(chit_inv, nil)
+        _G.__FALLBACK_REC = org.recommend_chest_label(fallback_inv, nil)
+
+        local suggestions = org.label_suggestions(chit_inv, nil)
+        _G.__CHIT_HAS_CURRENCY_SUG = false
+        for _, sug in ipairs(suggestions) do
+            if sug == "All: Currency" then
+                _G.__CHIT_HAS_CURRENCY_SUG = true
+            end
+        end
+
+        _G.__SCORE_COMPONENT = org.rule_score(
+            org.parse_label("All: Component"),
+            { id = "ITEM_Resources_Currency_Chit_Garou", name = "Garou Chit", categories = { "Currency" } }
+        )
+        _G.__SCORE_CURRENCY = org.rule_score(
+            org.parse_label("All: Currency"),
+            { id = "ITEM_Resources_Currency_Chit_Garou", name = "Garou Chit", categories = { "Currency" } }
+        )
+        _G.__SCORE_RESOURCE = org.rule_score(
+            org.parse_label("All: Resource"),
+            { id = "ITEM_Resources_Unknown_Relic", name = "Unknown Relic", categories = { "Resource" } }
+        )
+        """)
+        self.assertEqual(self.lua.eval("_G.__LABEL_WHILE_STALE_NATIVE"), "All: Herb")
+        self.assertEqual(self.lua.eval("_G.__LABEL_AFTER_MANUAL_RENAME"), "Player Override")
+        self.assertEqual(self.lua.eval("_G.__CHIT_REC"), "All: Component")
+        self.assertEqual(self.lua.eval("_G.__FALLBACK_REC"), "Misc")
+        self.assertTrue(self.lua.eval("_G.__CHIT_HAS_CURRENCY_SUG"))
+        self.assertEqual(self.lua.eval("_G.__SCORE_RESOURCE"), 2)
+        self.assertIsNotNone(self.lua.eval("_G.__SCORE_COMPONENT"))
+        self.assertGreater(self.lua.eval("_G.__SCORE_CURRENCY"), self.lua.eval("_G.__SCORE_COMPONENT"))
+
 
 if __name__ == "__main__":
     unittest.main()

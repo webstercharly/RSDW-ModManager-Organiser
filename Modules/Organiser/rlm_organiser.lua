@@ -256,7 +256,7 @@ local BANK_THEMES = {
         id = "crafting",
         label = "All: Component",
         name = "Crafting & Leather",
-        categories = { "Bone", "Hide", "Leather", "Thread", "Cloth", "Gem", "Component", "Processed", "Seed", "Special", "Basic", "Resource" },
+        categories = { "Bone", "Hide", "Leather", "Thread", "Cloth", "Gem", "Currency", "Component", "Processed", "Seed", "Special", "Basic", "Resource" },
         patterns = { "tanner", "loom", "spinning", "craftingstation", "workbench" },
         station_name = "Tanner & Loom",
         chest_type = "Chest",
@@ -434,6 +434,7 @@ local CRAFT_INFERENCE_RULES = {
     { "Seed", { "seed" } },
     { "Gem", { "gem", "crystal", "amber", "quartz", "sapphire", "emerald", "ruby", "diamond" } },
     { "Essence", { "essence", "anima", "ember", "ether", "core", "dust", "ash", "ashes" } },
+    { "Currency", { "chit", "coin", "token", "currency", "doubloon" } },
     { "Ingredient", { "flour", "sugar", "egg", "butter", "milk", "cream", "honey", "spice", "meat", "steak" } },
 }
 
@@ -484,6 +485,10 @@ local function infer_categories_from_identity(id, name, cats)
         return
     end
 
+    if id_l:find("_currency_", 1, true) then
+        append_unique_cat(cats, "Currency")
+        return
+    end
     for _, rule in ipairs(CRAFT_INFERENCE_RULES) do
         local cat_name, kws = rule[1], rule[2]
         for _, kw in ipairs(kws) do
@@ -492,6 +497,9 @@ local function infer_categories_from_identity(id, name, cats)
                 return
             end
         end
+    end
+    if #cats == 0 and id_l:find("^item_resources_") then
+        append_unique_cat(cats, "Resource")
     end
 end
 
@@ -714,8 +722,15 @@ end
 function M.label_of(actor)
     if not engine.is_valid(actor) then return nil end
     local custom = game_custom_name(actor)
-    if custom and custom ~= "" then return trim(custom) end
     local stored = find_stored_label(actor)
+    if custom and custom ~= "" then
+        local clean_custom = trim(custom)
+        if stored and stored.label and stored.native_at_set ~= nil
+            and clean_custom == trim(stored.native_at_set) then
+            return stored.label
+        end
+        return clean_custom
+    end
     return stored and stored.label or nil
 end
 
@@ -727,7 +742,8 @@ function M.set_label(controller, actor, label, opts)
     local text = label and trim(label):sub(1, NAME_LIMIT) or nil
     if text == "" then text = nil end
 
-    local custom_name_supported = game_custom_name(actor) ~= nil
+    local native_before = game_custom_name(actor)
+    local custom_name_supported = native_before ~= nil
     if custom_name_supported and engine.is_valid(controller) then
         local ok_rename, rename_err = pcall(function()
             controller:Server_SetObjectCustomName(actor, FText(text or ""))
@@ -754,6 +770,7 @@ function M.set_label(controller, actor, label, opts)
         existing.y = math.floor(pos.Y or 0)
         existing.z = math.floor(pos.Z or 0)
         existing.label = text
+        existing.native_at_set = native_before and trim(native_before) or ""
     end
     if not (opts and opts.skip_save) then
         store.save("organiser")
@@ -1808,6 +1825,7 @@ local CATEGORY_ORDER = {
     ["Leather"] = 38.6,
     ["Thread"] = 39.1,
     ["Cloth"] = 39.2,
+    ["Currency"] = 39.8,
     ["Gem"] = 40.2,
     ["Essence"] = 40.3,
     ["Rune"] = 40.5,
@@ -1831,6 +1849,7 @@ local MATERIAL_FAMILY_PATTERNS = {
     -- Textiles
     { 39.10, { "thread", "yarn", "twine", "string", "cord", "wool" } },
     { 39.20, { "cloth", "linen", "silk", "fabric", "weave" } },
+    { 39.80, { "chit", "coin", "token", "currency", "doubloon" } },
     -- Botanical
     { 37.50, { "herb", "flower", "leaf", "leaves", "moss", "root", "spore", "flax", "marigold", "harralander", "bitterweed", "vervain" } },
     -- Minerals, gems, alchemy & arcana
@@ -2290,6 +2309,7 @@ local SUB_CATEGORY_ROLES = {
     { id = "sub_ammo",       label = "All: Ammo",       category = "Ammo",       station_theme = "equipment", min_stacks = 2 },
     { id = "sub_tome",       label = "All: Tome",       category = "Tome",       station_theme = "magic",     min_stacks = 2 },
     { id = "sub_ingredient", label = "All: Ingredient", category = "Ingredient", station_theme = "food",      min_stacks = 2 },
+    { id = "sub_currency",   label = "All: Currency",   category = "Currency",   station_theme = "crafting",  min_stacks = 2 },
     { id = "sub_raw_fish",   label = "All: Raw Fish",   category = "Raw Fish",   station_theme = "food",      min_stacks = 2 },
     { id = "sub_prime_fish", label = "All: Prime Fish", category = "Prime Fish", station_theme = "food",      min_stacks = 2 },
     { id = "sub_drink",      label = "All: Drink",      category = "Drink",      station_theme = "food",      min_stacks = 2 },
