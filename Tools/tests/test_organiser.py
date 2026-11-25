@@ -2401,6 +2401,44 @@ class OrganiserServiceTests(unittest.TestCase):
         end
         local detected = org.detect_workstations({ X = 0, Y = 0, Z = 0 }, 40)
         _G.__DETECTED_FARM_THEME = detected[1] and detected[1].theme and detected[1].theme.id or nil
+
+        -- Verify Grindstone routes to ore (not magic), and All: Herb avoids hugging the Kiln.
+        local grind = {
+            GetAddress = function() return 951 end,
+            GetFullName = function() return "BP_Station_Grindstone_C_951" end,
+            K2_GetActorLocation = function() return { X = 1000, Y = 0, Z = 0 } end,
+        }
+        _G.FindAllOf = function(cls)
+            if cls == "BaseBuildingActor" then return { grind } end
+            return {}
+        end
+        local det_grind = org.detect_workstations({ X = 0, Y = 0, Z = 0 }, 40)
+        _G.__GRIND_THEME = det_grind[1] and det_grind[1].theme and det_grind[1].theme.id or nil
+
+        local station_chests = {
+            { pos = { X = 100, Y = 0, Z = 0 }, d2 = 10000, maxSlots = 20, slots = {
+                { id = "ITEM_Herb_1", name = "Herb 1", categories = { "Herb" } },
+                { id = "ITEM_Herb_2", name = "Herb 2", categories = { "Herb" } },
+                { id = "ITEM_Herb_3", name = "Herb 3", categories = { "Herb" } },
+                { id = "ITEM_Ore_1", name = "Tin Ore", categories = { "Ore" } },
+            } },
+            { pos = { X = 500, Y = 0, Z = 0 }, d2 = 250000, maxSlots = 20, slots = {} },
+            { pos = { X = 900, Y = 0, Z = 0 }, d2 = 810000, maxSlots = 20, slots = {} },
+            { pos = { X = 1000, Y = 0, Z = 0 }, d2 = 1000000, maxSlots = 20, slots = {} },
+            { pos = { X = 1100, Y = 0, Z = 0 }, d2 = 1210000, maxSlots = 20, slots = {} },
+            { pos = { X = 1200, Y = 0, Z = 0 }, d2 = 1440000, maxSlots = 20, slots = {} },
+            { pos = { X = 1300, Y = 0, Z = 0 }, d2 = 1690000, maxSlots = 20, slots = {} },
+            { pos = { X = 1400, Y = 0, Z = 0 }, d2 = 1960000, maxSlots = 20, slots = {} },
+        }
+        local base_stations = {
+            { theme = { id = "ore" }, pos = { X = 110, Y = 0, Z = 0 } },
+            { theme = { id = "magic" }, pos = { X = 510, Y = 0, Z = 0 } },
+        }
+        local station_plan = org.plan_base_roles(station_chests, base_stations, { force_replan = true })
+        for _, a in ipairs(station_plan.assignments or {}) do
+            if a.label == "All: Potion" then _G.__POTION_CHEST_X = a.chest.pos.X end
+            if a.label == "All: Herb" then _G.__HERB_CHEST_X = a.chest.pos.X end
+        end
         """)
         self.assertEqual(self.lua.eval("_G.__REACHABLE_COUNT"), 1)
         self.assertEqual(self.lua.eval("_G.__REACHABLE_ADDR"), 901)
@@ -2421,6 +2459,9 @@ class OrganiserServiceTests(unittest.TestCase):
         self.assertEqual(self.lua.eval("_G.__FARMING_SCORE_IN_FARM"), 2)
         self.assertEqual(self.lua.eval("_G.__SEED_SCORE_IN_FARM"), 1.5)
         self.assertEqual(self.lua.eval("_G.__DETECTED_FARM_THEME"), "farming")
+        self.assertEqual(self.lua.eval("_G.__GRIND_THEME"), "ore")
+        self.assertEqual(self.lua.eval("_G.__POTION_CHEST_X"), 500)
+        self.assertEqual(self.lua.eval("_G.__HERB_CHEST_X"), 900)
 
 
 if __name__ == "__main__":

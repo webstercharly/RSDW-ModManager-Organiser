@@ -213,7 +213,7 @@ local BANK_THEMES = {
         label = "All: Ore",
         name = "Ore & Smithing",
         categories = { "Ore", "Metal", "Mineral" },
-        patterns = { "smelter", "furnace", "anvil", "forge", "kiln" },
+        patterns = { "smelter", "furnace", "anvil", "forge", "kiln", "grindstone" },
         station_name = "Smelter / Furnace",
         chest_type = "Iron Chest",
     },
@@ -249,7 +249,7 @@ local BANK_THEMES = {
         label = "All: Potion",
         name = "Alchemy & Magic",
         categories = { "Potion", "Consumable", "Herb", "Essence", "Rune", "Tome", "Vestige", "Whetstone" },
-        patterns = { "cauldron", "grindstone", "altar", "alchemy", "magic", "sorcery" },
+        patterns = { "cauldron", "altar", "alchemy", "magic", "sorcery" },
         station_name = "Cauldron & Alchemy Table",
         chest_type = "Chest",
     },
@@ -2746,14 +2746,25 @@ function M.plan_base_roles(all_chests, workstations, opts)
                 score = score + (64 - math.min(cap, 64)) * 0.15
             end
             if station_theme_id and chest.pos then
+                local min_match_d2 = math.huge
+                local min_other_d2 = math.huge
                 for _, ws in ipairs(workstations) do
-                    if ws.theme and ws.theme.id == station_theme_id then
+                    if ws.theme and ws.theme.id and ws.pos then
                         local d = distance_squared(chest.pos, ws.pos)
-                        if d < station_range_sq then
-                            score = score + 100 + math.max(0, 10 - math.sqrt(d) / 100)
-                            break
+                        if ws.theme.id == station_theme_id then
+                            if d < min_match_d2 then min_match_d2 = d end
+                        else
+                            if d < min_other_d2 then min_other_d2 = d end
                         end
                     end
+                end
+                if min_match_d2 < station_range_sq then
+                    local d_m = math.sqrt(min_match_d2) / 100
+                    score = score + 80 + math.max(0, 10 - d_m) * 4
+                end
+                -- Penalise hugging a different workstation (< 4m) closer than our target station.
+                if min_other_d2 < (4 * 100) * (4 * 100) and min_other_d2 < min_match_d2 then
+                    score = score - 30
                 end
             end
             local item_bonus = 0
