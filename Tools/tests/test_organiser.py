@@ -1777,15 +1777,22 @@ class OrganiserServiceTests(unittest.TestCase):
         _G.FindFirstOf = function() return nil end
 
         local org = organiser_service
+        org.auto_organise_base({ force_replan = false })
+        _G.__FILL_CHEST1 = renamed["BP_BaseBuilding_Chest_Iron_C_701"]
+        _G.__FILL_CHEST2 = renamed["BP_BaseBuilding_Chest_Iron_C_702"]
+
         org.auto_organise_base()
-        _G.__RENAMED_CHEST1 = renamed["BP_BaseBuilding_Chest_Iron_C_701"]
-        _G.__RENAMED_CHEST2 = renamed["BP_BaseBuilding_Chest_Iron_C_702"]
+        _G.__OVERRIDE_CHEST1 = renamed["BP_BaseBuilding_Chest_Iron_C_701"]
+        _G.__OVERRIDE_CHEST2 = renamed["BP_BaseBuilding_Chest_Iron_C_702"]
 
         should_fail = true
         org.set_label(pc, chest1, "All: Wood")
         """)
-        self.assertEqual(self.lua.eval("_G.__RENAMED_CHEST1"), "All: Ore")
-        self.assertIsNone(self.lua.eval("_G.__RENAMED_CHEST2"))
+        self.assertEqual(self.lua.eval("_G.__FILL_CHEST1"), "All: Ore")
+        self.assertIsNone(self.lua.eval("_G.__FILL_CHEST2"))
+        self.assertIsNotNone(self.lua.eval("_G.__OVERRIDE_CHEST1"))
+        self.assertIsNotNone(self.lua.eval("_G.__OVERRIDE_CHEST2"))
+        self.assertNotEqual(self.lua.eval("_G.__OVERRIDE_CHEST2"), "Mining & Masonry")
         logs = [str(v) for v in self.t["logs"].values()]
         self.assertTrue(any("chest rename RPC failed" in entry for entry in logs))
 

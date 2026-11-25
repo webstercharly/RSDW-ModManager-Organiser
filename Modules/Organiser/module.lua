@@ -95,15 +95,15 @@ local function overview_view()
     end
 
     rows[#rows + 1] = {
-        title = "AUTO-ORGANISE BASE (BANK SORT)  *",
+        title = "AUTO-ORGANISE BASE (FULL RE-PLAN & RENAME)  *",
         value = "action:auto_organise",
-        detail = "Assign bank roles to unlabelled chests and re-sort all base storage.",
+        detail = "Full base bank sort: re-plan, rename non-Trash chests (overriding existing names), and re-sort.",
         compact = true,
     }
     rows[#rows + 1] = {
-        title = "RE-PLAN & RENAME ALL CHESTS",
-        value = "action:replan_organise",
-        detail = "Overwrite existing non-Trash chest names with adaptive bank roles and re-sort.",
+        title = "FILL UNLABELLED CHESTS ONLY",
+        value = "action:fill_unlabelled",
+        detail = "Assign bank roles only to unlabelled chests while keeping existing names, then re-sort.",
         compact = true,
     }
     rows[#rows + 1] = {
@@ -503,6 +503,10 @@ function M.select_row(state, value)
         return true
     elseif text == "action:auto_organise" then
         local ok, message = organiser.auto_organise_base()
+        last_message = message
+        return true
+    elseif text == "action:fill_unlabelled" then
+        local ok, message = organiser.auto_organise_base({ force_replan = false })
         last_message = message
         return true
     elseif text == "action:replan_organise" then

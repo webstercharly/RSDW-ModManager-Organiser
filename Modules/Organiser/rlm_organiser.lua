@@ -2764,13 +2764,14 @@ function M.auto_organise_base(opts)
         return false, "No storage containers found within reach (" .. tostring(s.rangeMeters) .. " m)."
     end
 
+    local force_replan = not (type(opts) == "table" and opts.force_replan == false)
+    local plan_opts = { force_replan = force_replan }
     local workstations = M.detect_workstations(pawn_pos, s.rangeMeters or 40)
-    local plan = M.plan_base_roles(all_chests, workstations, opts)
+    local plan = M.plan_base_roles(all_chests, workstations, plan_opts)
 
     local pending_labels = {}
     local queued_chests = {}
     local newly_labelled = 0
-    local force_replan = type(opts) == "table" and opts.force_replan == true
     for _, step in ipairs(plan.assignments) do
         local prev_low = tostring(step.chest.label or ""):lower()
         local next_low = tostring(step.label or ""):lower()

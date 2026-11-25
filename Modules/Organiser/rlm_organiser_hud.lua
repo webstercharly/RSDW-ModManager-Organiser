@@ -424,8 +424,8 @@ local function build_content(ui)
 
     two_row("DEPOSIT BACKPACK", "deposit", "SORT THIS CHEST", "sort", 6)
     two_row("RESORT NEARBY", "resort", "ORGANISE BASE", "auto_organise", 6)
-    local replan_btn, trash_btn = two_row("RE-PLAN ALL", "replan_organise", "TOGGLE TRASH", "toggle_trash", 6)
-    ui.replan_btn = replan_btn
+    local fill_btn, trash_btn = two_row("FILL NEW ONLY", "fill_unlabelled", "TOGGLE TRASH", "toggle_trash", 6)
+    ui.replan_btn = fill_btn
     ui.trash_btn = trash_btn
     local lbl_hdr, lbl_hdr_slot = add_text(ui, col, "v", "SET CHEST BANK ROLE", 12, GOLD)
     ui.label_header = lbl_hdr
@@ -547,6 +547,9 @@ local function run_click_action(action_id, inv, actor)
         set_status(msg)
     elseif action_id == "auto_organise" then
         local ok, msg = organiser.auto_organise_base()
+        set_status(msg)
+    elseif action_id == "fill_unlabelled" then
+        local ok, msg = organiser.auto_organise_base({ force_replan = false })
         set_status(msg)
     elseif action_id == "replan_organise" then
         local ok, msg = organiser.replan_organise_base()
