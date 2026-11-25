@@ -356,7 +356,42 @@ local function build_frame(pc, host)
         btn_cls = btn_cls,
         queue = {},
         label_btns = {},
+        last_h = PANEL_HEIGHT,
     }
+end
+
+local function fit_panel_height(ui)
+    if not (ui and valid(ui.frame) and valid(ui.col)) then return end
+    local viewport_h = 1080
+    pcall(function()
+        local layout = StaticFindObject("/Script/UMG.Default__WidgetLayoutLibrary")
+        if valid(layout) and valid(ui.pc) then
+            local vp = layout:GetViewportSize(ui.pc)
+            local scale = layout:GetViewportScale(ui.pc)
+            if vp and type(vp.Y) == "number" and type(scale) == "number" and scale > 0 then
+                viewport_h = vp.Y / scale
+            end
+        end
+    end)
+    local _, y = panel_coords()
+    local max_h = math.max(360, math.floor(viewport_h - y - 24))
+    local measured_h = nil
+    pcall(function()
+        ui.col:ForceLayoutPrepass()
+        local ds = ui.col:GetDesiredSize()
+        if ds and type(ds.Y) == "number" and ds.Y > 40 and ds.Y < 4000 then
+            measured_h = math.ceil(ds.Y) + 70
+        end
+    end)
+    if not measured_h then return end
+    local target_h = math.max(320, math.min(max_h, measured_h))
+    if math.abs((ui.last_h or 0) - target_h) < 1 then return end
+    ui.last_h = target_h
+    if ui.viewport then
+        pcall(function() ui.frame:SetDesiredSizeInViewport({ X = PANEL_WIDTH, Y = target_h }) end)
+    elseif valid(ui.slot) then
+        pcall(function() ui.slot:SetSize({ X = PANEL_WIDTH, Y = target_h }) end)
+    end
 end
 
 local function build_content(ui)
@@ -626,6 +661,7 @@ local function tick()
 
     if state.stage == "content" then
         flush_later(state.ui)
+        fit_panel_height(state.ui)
         state.stage = "ready"
         return
     end
@@ -639,6 +675,7 @@ local function tick()
             local ok, msg = organiser.deposit_backpack()
             if msg and msg ~= "" then state.status_message = msg end
         end
+        fit_panel_height(state.ui)
         pcall(function() state.ui.frame:SetVisibility(0) end)
         diag_once("shown:" .. key, string.format("shown for %s (%s)",
             organiser.label_of(actor) or "Unlabelled chest",
@@ -666,6 +703,7 @@ local function tick()
     if state.last_render_key ~= render_key then
         state.last_render_key = render_key
         refresh_contents(state.ui, inv, actor)
+        fit_panel_height(state.ui)
     end
 end
 

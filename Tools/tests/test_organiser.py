@@ -1643,7 +1643,16 @@ class OrganiserServiceTests(unittest.TestCase):
                 AddChildToHorizontalBox = function() return { SetPadding = function() end, SetHorizontalAlignment = function() end, SetVerticalAlignment = function() end } end,
                 AddChildToOverlay = function() return { SetPadding = function() end, SetHorizontalAlignment = function() end, SetVerticalAlignment = function() end } end,
                 AddChild = function() return { SetPadding = function() end } end,
-                AddChildToCanvas = function() return { SetAutoSize = function() end, SetZOrder = function() end, SetAnchors = function() end, SetAlignment = function() end, SetPosition = function() end, SetSize = function() end } end,
+                AddChildToCanvas = function() return {
+                    SetAutoSize = function() end,
+                    SetZOrder = function() end,
+                    SetAnchors = function() end,
+                    SetAlignment = function() end,
+                    SetPosition = function() end,
+                    SetSize = function(_, sz) _G.__DOCKED_PANEL_H = sz and sz.Y or nil end,
+                } end,
+                ForceLayoutPrepass = function() _G.__PREPASS_CALLED = true end,
+                GetDesiredSize = function() return { X = 380, Y = 540 } end,
                 SetText = function() end,
                 SetLabelText = function() end,
                 SetColorAndOpacity = function() end,
@@ -1717,6 +1726,8 @@ class OrganiserServiceTests(unittest.TestCase):
         self.assertTrue(self.lua.eval("_G.__OPEN_FILTERED_NIL"))
         self.assertGreaterEqual(self.lua.eval("_G.__ASYNC_CALLBACK_COUNT"), 1)
         self.assertEqual(self.lua.eval("_G.__BACKUP_HUD_VIS"), 0)
+        self.assertTrue(self.lua.eval("_G.__PREPASS_CALLED"))
+        self.assertEqual(self.lua.eval("_G.__DOCKED_PANEL_H"), 610)
 
 
 if __name__ == "__main__":
