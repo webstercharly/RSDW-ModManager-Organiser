@@ -2463,6 +2463,113 @@ class OrganiserServiceTests(unittest.TestCase):
         self.assertEqual(self.lua.eval("_G.__POTION_CHEST_X"), 500)
         self.assertEqual(self.lua.eval("_G.__HERB_CHEST_X"), 900)
 
+    def test_partial_stack_merge_on_full_chest_and_material_subfamily_sorting(self):
+        self.lua.globals()._TEST_ORG = self.organiser
+        self.lua.execute(r"""
+        local org = _TEST_ORG
+        -- Verify sub-family ordering within Metal, Mineral, Wood, Leather:
+        _G.__METAL_ORDER = org.compare_items(
+            { name = "Steel Bar", id = "ITEM_Resources_SteelBar", count = 1, categories = { "Processed", "Metal" } },
+            { name = "Black Metal Scraps", id = "ITEM_Resources_BlackMetal_Scraps", count = 5, categories = { "Metal" } }
+        )
+        _G.__MINERAL_ORDER = org.compare_items(
+            { name = "Stone", id = "ITEM_Resources_Stone", count = 99, categories = { "Basic", "Mineral" } },
+            { name = "Ground Granite", id = "ITEM_Resources_Ground_Granite", count = 10, categories = { "Processed", "Mineral" } }
+        )
+        _G.__WOOD_ORDER = org.compare_items(
+            { name = "Yew Logs", id = "ITEM_Resources_Wood_Yew", count = 10, categories = { "Wood", "Basic" } },
+            { name = "Ash Plank", id = "ITEM_Resources_Plank_Ash", count = 10, categories = { "Wood", "Processed" } }
+        )
+        _G.__LEATHER_ORDER = org.compare_items(
+            { name = "Hard Leather", id = "ITEM_Resources_Leather_Hard", count = 5, categories = { "Processed", "Leather" } },
+            { name = "Draconic Leather Scraps", id = "ITEM_Resources_Leather_Scraps_Draconic", count = 5, categories = { "Leather" } }
+        )
+
+        -- Verify full chest merges Dragon Blood (95 + 51 -> 99 + 47) via MoveItemBetweenInventories
+        -- (not SplitAndPutStack on an occupied slot) and places both stacks side by side.
+        package.loaded.rlm_engine.local_generation_allowed = function() return false, "RemoteClient" end
+        _G.__ASYNC_QUEUE = {}
+        local t = 200.0
+        package.loaded.rlm_engine.real_time_seconds = function() return t end
+        package.loaded.rlm_async = {
+            after = function(delay, fn)
+                _G.__ASYNC_QUEUE[#_G.__ASYNC_QUEUE + 1] = { due = t + (delay or 0), fn = fn }
+                return true
+            end,
+        }
+        local function mk(id, name, cat, count)
+            return {
+                IsValid = function() return true end,
+                Count = count,
+                ItemData = {
+                    IsValid = function() return true end,
+                    Name = { ToString = function() return name end },
+                    MaxStackSize = 99,
+                    GetFName = function() return { ToString = function() return id end } end,
+                    ItemFilterTags = { GameplayTags = { ForEach = function(_, fn)
+                        fn(nil, { get = function() return { TagName = { ToString = function() return cat end } } end })
+                    end } },
+                },
+            }
+        end
+        local slots = {
+            [0] = mk("ITEM_Resources_DragonBlood", "Dragon Blood", "ItemFilter.Material.ProcessedMaterial", 95),
+            [1] = mk("ITEM_Resources_Jade", "Jade", "ItemFilter.Material.BasicMaterial", 9),
+            [2] = mk("ITEM_Resources_DemonicOil", "Demonic Oil", "ItemFilter.Material.ProcessedMaterial", 3),
+            [3] = mk("ITEM_Resources_DragonBlood", "Dragon Blood", "ItemFilter.Material.ProcessedMaterial", 51),
+        }
+        local inv = {
+            MaxSlotCount = 4,
+            IsValid = function() return true end,
+            GetItemFromSlot = function(_, s) return slots[s] end,
+            GetNumItemsInSlot = function(_, s) return slots[s] and slots[s].Count or 0 end,
+            ItemSlots = { ForEach = function(_, fn)
+                for i = 0, 3 do if slots[i] then fn(i + 1, { get = function() return slots[i] end }) end end
+            end },
+        }
+        _G.__SPLIT_CALLED = false
+        local ctrl = {
+            SplitAndPutStack = function()
+                _G.__SPLIT_CALLED = true
+                return false
+            end,
+            MoveItemBetweenInventories = function(_, _, s, _, d)
+                if slots[s] and slots[d] and slots[s].ItemData.GetFName().ToString() == slots[d].ItemData.GetFName().ToString() then
+                    local room = 99 - slots[d].Count
+                    local take = math.min(room, slots[s].Count)
+                    slots[d].Count = slots[d].Count + take
+                    slots[s].Count = slots[s].Count - take
+                    if slots[s].Count <= 0 then slots[s] = nil end
+                else
+                    local tmp = slots[s]; slots[s] = slots[d]; slots[d] = tmp
+                end
+                return true
+            end,
+        }
+        org.sort_storage(inv, ctrl)
+        local guard = 0
+        while #_G.__ASYNC_QUEUE > 0 and guard < 60 do
+            guard = guard + 1
+            table.sort(_G.__ASYNC_QUEUE, function(a, b) return a.due < b.due end)
+            local ev = table.remove(_G.__ASYNC_QUEUE, 1)
+            t = ev.due
+            ev.fn()
+        end
+        _G.__FINAL_NAMES = {
+            slots[0] and (slots[0].ItemData.Name.ToString() .. ":" .. tostring(slots[0].Count)) or "nil",
+            slots[1] and (slots[1].ItemData.Name.ToString() .. ":" .. tostring(slots[1].Count)) or "nil",
+            slots[2] and (slots[2].ItemData.Name.ToString() .. ":" .. tostring(slots[2].Count)) or "nil",
+            slots[3] and (slots[3].ItemData.Name.ToString() .. ":" .. tostring(slots[3].Count)) or "nil",
+        }
+        """)
+        self.assertTrue(self.lua.eval("_G.__METAL_ORDER"))
+        self.assertTrue(self.lua.eval("_G.__MINERAL_ORDER"))
+        self.assertTrue(self.lua.eval("_G.__WOOD_ORDER"))
+        self.assertTrue(self.lua.eval("_G.__LEATHER_ORDER"))
+        self.assertFalse(self.lua.eval("_G.__SPLIT_CALLED"))
+        final_names = list(self.lua.eval("_G.__FINAL_NAMES").values())
+        self.assertEqual(final_names, ["Demonic Oil:3", "Dragon Blood:99", "Dragon Blood:47", "Jade:9"])
+
 
 if __name__ == "__main__":
     unittest.main()

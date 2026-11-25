@@ -1476,7 +1476,8 @@ local function execute_remote_transfer(token, ctrl, src_inv, src_slot, dst_inv, 
         return
     end
 
-    local split = is_split and amount and amount > 0 and amount < before
+    local merge_onto_existing = dst_count_before > 0 and dst_id_before == src_id_before
+    local split = (not merge_onto_existing) and is_split and amount and amount > 0 and amount < before
     local moved_count = split and amount or before
     local ok, rpc_ret = pcall(function()
         if split then
@@ -2144,6 +2145,7 @@ local MATERIAL_FAMILY_PATTERNS = {
     { 38.15, { "horn", "antler", "fang", "claw", "tusk", "talon", "wing" } },
     { 38.25, { "feather", "scale", "shell", "chitin", "carapace" } },
     { 38.40, { "pelt", "hide", "dragonhide", "fur", "fleece", "skin" } },
+    { 38.65, { "scrap", "scraps" } },
     { 38.60, { "leather" } },
     -- Textiles
     { 39.10, { "thread", "yarn", "twine", "string", "cord", "wool", "fibre", "fibres", "fibrous" } },
@@ -2170,17 +2172,36 @@ local function item_sort_rank(info)
         end
     end
 
+    local n_l = tostring(info and info.name or ""):lower()
+    local id_l = tostring(info and info.id or ""):lower():gsub("_", " ")
+    local function has_any(kws)
+        for _, kw in ipairs(kws) do
+            if has_word_token(n_l, kw) or has_word_token(id_l, kw) then return true end
+        end
+        return false
+    end
+
+    -- Group refined items cleanly inside primary material categories (bars vs salvage, raw vs ground minerals, logs vs planks).
+    if min_rank == 31 then
+        if has_any({ "salvage", "scrap", "scraps", "shrapnel" }) then return 31.2 end
+        if has_any({ "spike", "rivet", "nail" }) then return 31.5 end
+        return 31.1
+    elseif min_rank == 32 then
+        if has_any({ "coal", "charcoal" }) then return 32.2 end
+        if has_any({ "ground" }) then return 32.3 end
+        return 32.1
+    elseif min_rank == 33 then
+        if has_any({ "plank" }) then return 33.2 end
+        if has_any({ "bark", "twig" }) then return 33.3 end
+        return 33.1
+    end
+
     -- For mixed crafting/resource/unclassified stacks, group visually by material family
     -- (leather together, threads/cloth together, bones/horns together, herbs together, cores/shards together).
     if min_rank >= 38 then
-        local n_l = tostring(info and info.name or ""):lower()
-        local id_l = tostring(info and info.id or ""):lower():gsub("_", " ")
         for _, entry in ipairs(MATERIAL_FAMILY_PATTERNS) do
-            local rank, kws = entry[1], entry[2]
-            for _, kw in ipairs(kws) do
-                if has_word_token(n_l, kw) or has_word_token(id_l, kw) then
-                    return rank
-                end
+            if has_any(entry[2]) then
+                return entry[1]
             end
         end
     end
