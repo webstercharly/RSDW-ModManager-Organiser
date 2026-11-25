@@ -1341,7 +1341,8 @@ class OrganiserServiceTests(unittest.TestCase):
         self.assertEqual(len(list(p_keep["assignments"].values())), 0)
         force_labels = [a["label"] for a in p_force["assignments"].values()]
         self.assertIn("All: Ore", force_labels)
-        self.assertIn("All: Seed", force_labels)
+        self.assertIn("All: Farming", force_labels)
+        self.assertNotIn("All: Seed", force_labels)
         self.assertNotIn("Trash", force_labels)
 
     def test_label_suggestions_and_recommend_prioritise_bank_roles_over_single_items(self):
@@ -2439,6 +2440,27 @@ class OrganiserServiceTests(unittest.TestCase):
             if a.label == "All: Potion" then _G.__POTION_CHEST_X = a.chest.pos.X end
             if a.label == "All: Herb" then _G.__HERB_CHEST_X = a.chest.pos.X end
         end
+
+        -- Verify All: Farming holds Seeds + Farming Tools together in a single chest rather than splitting All: Seed.
+        local farm_slots = {
+            { id = "ITEM_WateringCan_Wood", name = "Wooden Watering Can", categories = { "Farming" } },
+            { id = "ITEM_Bucket_Compost", name = "Compost Bucket", categories = { "Farming" } },
+        }
+        for s = 1, 10 do
+            farm_slots[#farm_slots + 1] = { id = "ITEM_Seed_" .. s, name = "Seed " .. s, categories = { "Seed" } }
+        end
+        local farm_chests = {
+            { pos = { X = 3000, Y = 0, Z = 0 }, d2 = 9000000, maxSlots = 32, slots = farm_slots },
+        }
+        for i = 2, 12 do
+            farm_chests[i] = { pos = { X = i * 100, Y = 0, Z = 0 }, d2 = i * i * 10000, maxSlots = 32, slots = {} }
+        end
+        local farm_plan = org.plan_base_roles(farm_chests, {
+            { theme = { id = "farming" }, pos = { X = 3010, Y = 0, Z = 0 } },
+        }, { force_replan = true })
+        local farm_labels = {}
+        for _, a in ipairs(farm_plan.assignments or {}) do farm_labels[a.label] = true end
+        _G.__FARM_UNIFIED = (farm_labels["All: Farming"] == true) and (farm_labels["All: Seed"] == nil)
         """)
         self.assertEqual(self.lua.eval("_G.__REACHABLE_COUNT"), 1)
         self.assertEqual(self.lua.eval("_G.__REACHABLE_ADDR"), 901)
@@ -2462,6 +2484,7 @@ class OrganiserServiceTests(unittest.TestCase):
         self.assertEqual(self.lua.eval("_G.__GRIND_THEME"), "ore")
         self.assertEqual(self.lua.eval("_G.__POTION_CHEST_X"), 500)
         self.assertEqual(self.lua.eval("_G.__HERB_CHEST_X"), 900)
+        self.assertTrue(self.lua.eval("_G.__FARM_UNIFIED"))
 
     def test_partial_stack_merge_on_full_chest_and_material_subfamily_sorting(self):
         self.lua.globals()._TEST_ORG = self.organiser

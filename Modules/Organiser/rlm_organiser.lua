@@ -2649,7 +2649,6 @@ local SUB_CATEGORY_ROLES = {
     { id = "sub_cloth",     label = "All: Cloth",     category = "Cloth",     station_theme = "crafting",  min_stacks = 2 },
     { id = "sub_bone",      label = "All: Bone",      category = "Bone",      station_theme = "crafting",  min_stacks = 2 },
     { id = "sub_herb",      label = "All: Herb",      category = "Herb",      station_theme = "magic",     min_stacks = 2 },
-    { id = "sub_seed",      label = "All: Seed",      category = "Seed",      station_theme = "farming",   min_stacks = 2 },
     { id = "sub_essence",   label = "All: Essence",   category = "Essence",   station_theme = "magic",     min_stacks = 2 },
     { id = "sub_rune",      label = "All: Rune",      category = "Rune",      station_theme = "magic",     min_stacks = 2 },
     { id = "sub_gem",       label = "All: Gem",       category = "Gem",       station_theme = "ore",       min_stacks = 2 },
