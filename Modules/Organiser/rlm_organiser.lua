@@ -729,9 +729,15 @@ function M.set_label(controller, actor, label, opts)
 
     local custom_name_supported = game_custom_name(actor) ~= nil
     if custom_name_supported and engine.is_valid(controller) then
-        pcall(function()
+        local ok_rename, rename_err = pcall(function()
             controller:Server_SetObjectCustomName(actor, FText(text or ""))
         end)
+        if not ok_rename then
+            log.warn("Organiser: chest rename RPC failed: " .. tostring(rename_err))
+            if not is_remote_client() then
+                pcall(function() actor:SetCustomName(FText(text or "")) end)
+            end
+        end
     end
 
     local existing, index = find_stored_label(actor)
@@ -850,6 +856,7 @@ function M.all_storage_in_reach(origin, settings)
                 local pos = actor_position(actor)
                 local d2 = distance_squared(origin, pos)
                 if d2 <= reach_squared then
+                    local native_name = game_custom_name(actor)
                     local label = M.label_of(actor)
                     local rule = M.parse_label(label)
                     local slots = read_inventory_slots(inv)
@@ -857,6 +864,7 @@ function M.all_storage_in_reach(origin, settings)
                     results[#results + 1] = {
                         actor = actor,
                         inv = inv,
+                        native_name = native_name,
                         label = label,
                         rule = rule,
                         distance = math.sqrt(d2) / 100,
@@ -2760,16 +2768,32 @@ function M.auto_organise_base(opts)
     local plan = M.plan_base_roles(all_chests, workstations, opts)
 
     local pending_labels = {}
+    local queued_chests = {}
     local newly_labelled = 0
+    local force_replan = type(opts) == "table" and opts.force_replan == true
     for _, step in ipairs(plan.assignments) do
         local prev_low = tostring(step.chest.label or ""):lower()
         local next_low = tostring(step.label or ""):lower()
+        local native_low = step.chest.native_name ~= nil and trim(step.chest.native_name):lower() or nil
         if prev_low ~= next_low then
             pending_labels[#pending_labels + 1] = { chest = step.chest, label = step.label }
+            queued_chests[step.chest] = true
             newly_labelled = newly_labelled + 1
+        elseif native_low ~= nil and (native_low == "" or (force_replan and native_low ~= next_low)) then
+            pending_labels[#pending_labels + 1] = { chest = step.chest, label = step.label }
+            queued_chests[step.chest] = true
         end
         step.chest.label = step.label
         step.chest.rule = M.parse_label(step.label)
+    end
+    for _, chest in ipairs(all_chests) do
+        local is_trash = chest.rule and chest.rule.kind == "trash"
+        if not queued_chests[chest] and not is_trash
+            and chest.label and chest.label ~= ""
+            and chest.native_name ~= nil and trim(chest.native_name) == "" then
+            pending_labels[#pending_labels + 1] = { chest = chest, label = chest.label }
+            queued_chests[chest] = true
+        end
     end
 
     if is_remote_client() then

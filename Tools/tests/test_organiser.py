@@ -1729,6 +1729,66 @@ class OrganiserServiceTests(unittest.TestCase):
         self.assertTrue(self.lua.eval("_G.__PREPASS_CALLED"))
         self.assertEqual(self.lua.eval("_G.__DOCKED_PANEL_H"), 610)
 
+    def test_auto_organise_syncs_blank_native_names_and_logs_rename_failure(self):
+        self.lua.execute(r"""
+        package.loaded.rlm_engine.local_generation_allowed = function() return true, "Standalone" end
+        local renamed = {}
+        local should_fail = false
+        local pc = {
+            IsValid = function() return true end,
+            Pawn = { IsValid = function() return true end, K2_GetActorLocation = function() return { X = 0, Y = 0, Z = 0 } end },
+            InventoryComponent = { IsValid = function() return true end, MaxSlotCount = 40, ItemSlots = { ForEach = function() end } },
+            InventoryController = { IsValid = function() return true end },
+            Server_SetObjectCustomName = function(self, actor, txt)
+                if should_fail then error("rpc rejected") end
+                renamed[actor:GetFullName()] = tostring(txt)
+            end,
+        }
+        package.loaded.rlm_engine.local_controller = function() return pc end
+        _G.FText = function(s) return tostring(s) end
+
+        local doc = package.loaded.rlm_store.get("organiser")
+        doc.labels = {
+            { name = "BP_BaseBuilding_Chest_Iron_C_701", label = "All: Ore", x = 100, y = 0, z = 0 },
+        }
+        local chest1 = {
+            GetAddress = function() return 701 end,
+            GetFullName = function() return "BP_BaseBuilding_Chest_Iron_C_701" end,
+            IsA = is_base_building,
+            GetCustomName = function() return { ToString = function() return "" end } end,
+            K2_GetActorLocation = function() return { X = 100, Y = 0, Z = 0 } end,
+        }
+        local chest2 = {
+            GetAddress = function() return 702 end,
+            GetFullName = function() return "BP_BaseBuilding_Chest_Iron_C_702" end,
+            IsA = is_base_building,
+            GetCustomName = function() return { ToString = function() return "Mining & Masonry" end } end,
+            K2_GetActorLocation = function() return { X = 200, Y = 0, Z = 0 } end,
+        }
+        _G.FindAllOf = function(cls)
+            if cls == "InventoryComponent" then
+                return {
+                    { GetOwner = function() return chest1 end, MaxSlotCount = 20, ItemSlots = { ForEach = function() end } },
+                    { GetOwner = function() return chest2 end, MaxSlotCount = 20, ItemSlots = { ForEach = function() end } },
+                }
+            end
+            return {}
+        end
+        _G.FindFirstOf = function() return nil end
+
+        local org = organiser_service
+        org.auto_organise_base()
+        _G.__RENAMED_CHEST1 = renamed["BP_BaseBuilding_Chest_Iron_C_701"]
+        _G.__RENAMED_CHEST2 = renamed["BP_BaseBuilding_Chest_Iron_C_702"]
+
+        should_fail = true
+        org.set_label(pc, chest1, "All: Wood")
+        """)
+        self.assertEqual(self.lua.eval("_G.__RENAMED_CHEST1"), "All: Ore")
+        self.assertIsNone(self.lua.eval("_G.__RENAMED_CHEST2"))
+        logs = [str(v) for v in self.t["logs"].values()]
+        self.assertTrue(any("chest rename RPC failed" in entry for entry in logs))
+
 
 if __name__ == "__main__":
     unittest.main()
