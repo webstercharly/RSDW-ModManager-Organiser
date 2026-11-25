@@ -1927,6 +1927,136 @@ class OrganiserServiceTests(unittest.TestCase):
         self.assertEqual(self.lua.eval("_G.__SETTER_RPC_COUNT"), 1)
         self.assertEqual(self.lua.eval("_G.__SETTER_RPC_LABEL"), "All: Potion")
 
+    def test_tight_storage_groups_similar_items_in_resort_and_deposit(self):
+        self.lua.execute(r"""
+        local org = organiser_service
+        package.loaded.rlm_engine.local_generation_allowed = function() return true, "Standalone" end
+
+        local function make_item(id, name, tag, count)
+            return {
+                IsValid = function() return true end,
+                Count = count or 1,
+                ItemData = {
+                    IsValid = function() return true end,
+                    GetFName = function() return { ToString = function() return id end } end,
+                    Name = { ToString = function() return name end },
+                    MaxStackSize = 99,
+                    ItemFilterTags = {
+                        GameplayTags = {
+                            ForEach = function(_, cb)
+                                cb(1, { get = function() return { TagName = { ToString = function() return tag end } } end })
+                            end,
+                        },
+                    },
+                },
+            }
+        end
+
+        local function make_inv(owner, max_slots, slots_tbl)
+            return {
+                IsValid = function() return true end,
+                GetOwner = function() return owner end,
+                MaxSlotCount = max_slots or 20,
+                ItemSlots = {
+                    ForEach = function(_, cb)
+                        for idx, item in pairs(slots_tbl) do
+                            cb(idx + 1, { get = function() return item end })
+                        end
+                    end,
+                },
+            }
+        end
+
+        local chest1 = {
+            GetAddress = function() return 951 end,
+            GetFullName = function() return "BP_BaseBuilding_Chest_Iron_C_951" end,
+            IsA = is_base_building,
+            GetCustomName = function() return { ToString = function() return "All: Ore" end } end,
+            K2_GetActorLocation = function() return { X = 100, Y = 0, Z = 0 } end,
+        }
+        local chest2 = {
+            GetAddress = function() return 952 end,
+            GetFullName = function() return "BP_BaseBuilding_Chest_Iron_C_952" end,
+            IsA = is_base_building,
+            GetCustomName = function() return { ToString = function() return "All: Wood" end } end,
+            K2_GetActorLocation = function() return { X = 200, Y = 0, Z = 0 } end,
+        }
+
+        local c1_slots = {
+            [0] = make_item("ITEM_CopperOre", "Copper Ore", "ItemFilter.Material.Ore", 10),
+            [1] = make_item("ITEM_Potion_Heal", "Healing Potion", "ItemFilter.Type.Consumable.Potion", 2),
+        }
+        local c2_slots = {
+            [0] = make_item("ITEM_AshLogs", "Ash Logs", "ItemFilter.Material.Wood", 10),
+            [1] = make_item("ITEM_Potion_Mana", "Minor Mana Potion", "ItemFilter.Type.Consumable.Potion", 1),
+            [2] = make_item("ITEM_Herb_Marigold", "Marigold Herb", "ItemFilter.Material.Herb", 3),
+            [3] = make_item("ITEM_Shield_Iron", "Iron Shield", "ItemFilter.Type.Equipment.Shield", 1),
+        }
+        local bp_slots = {
+            [8] = make_item("ITEM_Sword_Steel", "Steel Sword", "ItemFilter.Type.Equipment.Weapon", 1),
+        }
+
+        local inv1 = make_inv(chest1, 20, c1_slots)
+        local inv2 = make_inv(chest2, 20, c2_slots)
+        local inv_tbl = { [inv1] = c1_slots, [inv2] = c2_slots }
+        local player_inv = make_inv(nil, 40, bp_slots)
+        player_inv.NumberOfQuickActionSlots = 8
+        player_inv.InventoryPages = {
+            ForEach = function(_, cb)
+                cb(1, { get = function() return { SlotType = 1, NumSlots = 32 } end })
+            end,
+        }
+        inv_tbl[player_inv] = bp_slots
+
+        local ctrl = {
+            IsValid = function() return true end,
+            MoveItemBetweenInventories = function(_, src, ss, dst, ds)
+                local st_s, st_d = inv_tbl[src], inv_tbl[dst]
+                st_d[ds] = st_s[ss]
+                st_s[ss] = nil
+            end,
+        }
+        local pc = {
+            IsValid = function() return true end,
+            Pawn = { IsValid = function() return true end, K2_GetActorLocation = function() return { X = 0, Y = 0, Z = 0 } end },
+            InventoryComponent = player_inv,
+            InventoryController = ctrl,
+        }
+        package.loaded.rlm_engine.local_controller = function() return pc end
+        _G.FindAllOf = function(cls)
+            if cls == "InventoryComponent" then return { inv1, inv2 } end
+            return {}
+        end
+        _G.FindFirstOf = function() return nil end
+
+        local ok_res = org.resort_nearby_storage()
+        local ok_dep = org.deposit_backpack()
+        _G.__TIGHT_OK_RES = ok_res
+        _G.__TIGHT_OK_DEP = ok_dep
+
+        local found_heal_in_c1, found_heal_in_c2 = false, false
+        for _, it in pairs(c1_slots) do
+            if it.ItemData.Name:ToString() == "Healing Potion" then found_heal_in_c1 = true end
+        end
+        for _, it in pairs(c2_slots) do
+            if it.ItemData.Name:ToString() == "Healing Potion" then found_heal_in_c2 = true end
+        end
+        local found_sword_in_c2 = false
+        for _, it in pairs(c2_slots) do
+            if it.ItemData.Name:ToString() == "Steel Sword" then found_sword_in_c2 = true end
+        end
+        _G.__HEAL_IN_C1 = found_heal_in_c1
+        _G.__HEAL_IN_C2 = found_heal_in_c2
+        _G.__SWORD_IN_C2 = found_sword_in_c2
+        _G.__ORE_STAYS_IN_C1 = (c1_slots[0] ~= nil and c1_slots[0].ItemData.Name:ToString() == "Copper Ore")
+        """)
+        self.assertTrue(self.lua.eval("_G.__TIGHT_OK_RES"))
+        self.assertTrue(self.lua.eval("_G.__TIGHT_OK_DEP"))
+        self.assertFalse(self.lua.eval("_G.__HEAL_IN_C1"))
+        self.assertTrue(self.lua.eval("_G.__HEAL_IN_C2"))
+        self.assertTrue(self.lua.eval("_G.__SWORD_IN_C2"))
+        self.assertTrue(self.lua.eval("_G.__ORE_STAYS_IN_C1"))
+
 
 if __name__ == "__main__":
     unittest.main()

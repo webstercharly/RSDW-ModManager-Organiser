@@ -305,6 +305,16 @@ local BROAD_CATCHALL_CATEGORIES = {
     component = true,
 }
 
+local CATEGORY_THEME_ID = {}
+for _, theme in ipairs(BANK_THEMES) do
+    for _, cat in ipairs(theme.categories or {}) do
+        local clow = cat:lower()
+        if not BROAD_PARENT_CATEGORIES[clow] and not BROAD_CATCHALL_CATEGORIES[clow] and not CATEGORY_THEME_ID[clow] then
+            CATEGORY_THEME_ID[clow] = theme.id
+        end
+    end
+end
+
 function M.rule_score(rule, item_info, target_items)
     if not rule or not item_info then return nil end
     if rule.kind == "item" then
@@ -349,6 +359,87 @@ function M.rule_score(rule, item_info, target_items)
         return nil
     end
     return nil
+end
+
+local function item_similarity_sets(info)
+    local specific, broad, themes = {}, {}, {}
+    for _, cat in ipairs(info and info.categories or {}) do
+        local cl = cat:lower()
+        if BROAD_CATCHALL_CATEGORIES[cl] or BROAD_PARENT_CATEGORIES[cl] then
+            broad[cl] = true
+        else
+            specific[cl] = true
+            local tid = CATEGORY_THEME_ID[cl]
+            if tid then themes[tid] = true end
+        end
+    end
+    return specific, broad, themes
+end
+
+function M.similarity_score(item_info, container_items, exclude_slot)
+    if not item_info or not container_items then return 0 end
+    local id_l = tostring(item_info.id or ""):lower()
+    local name_l = tostring(item_info.name or ""):lower()
+    local spec, broad, themes = item_similarity_sets(item_info)
+    local score = 0
+
+    for _, other in ipairs(container_items) do
+        if exclude_slot == nil or other.slot ~= exclude_slot then
+            local o_id_l = tostring(other.id or ""):lower()
+            local o_name_l = tostring(other.name or ""):lower()
+            if (id_l ~= "" and o_id_l == id_l) or (name_l ~= "" and name_l ~= "?" and o_name_l == name_l) then
+                score = score + 100
+            else
+                local matched_tier = 0
+                for _, oc in ipairs(other.categories or {}) do
+                    local ocl = oc:lower()
+                    if spec[ocl] then
+                        matched_tier = 10
+                        break
+                    end
+                    if broad[ocl] and matched_tier < 0.5 then
+                        matched_tier = 0.5
+                    end
+                    local tid = CATEGORY_THEME_ID[ocl]
+                    if tid and themes[tid] and matched_tier < 3 then
+                        matched_tier = 3
+                    end
+                end
+                score = score + matched_tier
+            end
+        end
+    end
+    return score
+end
+
+local function filter_peer_items(items, exclude_slot)
+    if exclude_slot == nil or not items then return items end
+    local peers = {}
+    for _, other in ipairs(items) do
+        if other.slot ~= exclude_slot then
+            peers[#peers + 1] = other
+        end
+    end
+    return peers
+end
+
+local function placement_score(rule, item_info, container_items, exclude_slot)
+    if not rule or not item_info or rule.kind == "trash" then return 0 end
+    local base_items = (rule.kind == "misc" and exclude_slot ~= nil)
+        and filter_peer_items(container_items, exclude_slot)
+        or container_items
+    local base = M.rule_score(rule, item_info, base_items)
+    local sim = M.similarity_score(item_info, container_items, exclude_slot)
+    if base and base >= 1 then
+        return base + math.min(0.45, sim * 0.001)
+    end
+    if rule.kind == "misc" then
+        return 0.20 + math.min(0.60, sim * 0.005)
+    end
+    if sim > 0 then
+        return math.min(0.19, sim * 0.001)
+    end
+    return 0
 end
 
 -- UObject Inspection Helpers --------------------------------------------------
@@ -1449,17 +1540,16 @@ local function find_next_resort_step(storage_list, destinations)
             table.sort(src_items, function(a, b) return a.slot > b.slot end)
 
             for _, item in ipairs(src_items) do
-                local score_here = M.rule_score(src_st.rule, item, src_items) or 0
+                local score_here = placement_score(src_st.rule, item, src_items, item.slot)
                 local best_dest, best_slot = nil, nil
                 local best_score = score_here
 
                 for _, dest_st in ipairs(destinations) do
                     if dest_st.inv ~= src_st.inv and engine.is_valid(dest_st.inv) then
-                        local dest_items = dest_st.rule.kind == "misc" and inventory_snapshot(snapshots, dest_st.inv) or nil
-                        local score_there = M.rule_score(dest_st.rule, item, dest_items) or 0
+                        local dest_items = inventory_snapshot(snapshots, dest_st.inv)
+                        local score_there = placement_score(dest_st.rule, item, dest_items, nil)
                         if score_there > best_score or (score_there == best_score and best_dest and dest_st.d2 < best_dest.d2 and score_there > score_here) then
-                            local slots = dest_items or inventory_snapshot(snapshots, dest_st.inv)
-                            local candidate_slot = find_dest_slot_in_inv(dest_st.inv, item, slots)
+                            local candidate_slot = find_dest_slot_in_inv(dest_st.inv, item, dest_items)
                             if candidate_slot ~= nil then
                                 best_score = score_there
                                 best_dest = dest_st
@@ -1561,9 +1651,9 @@ local function find_next_deposit_step(inv, storage_list, locks_table, s, cost_ac
             local candidates = {}
             for i, st in ipairs(storage_list) do
                 if engine.is_valid(st.inv) then
-                    local slots = st.rule.kind == "misc" and inventory_snapshot(snapshots, st.inv) or nil
-                    local score = M.rule_score(st.rule, info, slots)
-                    if score then
+                    local slots = inventory_snapshot(snapshots, st.inv)
+                    local score = placement_score(st.rule, info, slots, nil)
+                    if score > 0 then
                         candidates[#candidates + 1] = { storage = st, index = i, score = score }
                     end
                 end
@@ -1733,6 +1823,15 @@ function M.deposit_backpack()
     table.sort(carried_items, function(a, b) return a.slot > b.slot end)
 
     local storage_space = {}
+    local inv_snapshots = {}
+    local function snapshot_for_index(idx, target_inv)
+        local list = inv_snapshots[idx]
+        if not list then
+            list = read_inventory_slots(target_inv)
+            inv_snapshots[idx] = list
+        end
+        return list
+    end
     local total_moved, total_kept = 0, 0
     local containers_used = {}
 
@@ -1741,8 +1840,8 @@ function M.deposit_backpack()
         if want > 0 then
             local candidates = {}
             for i, st in ipairs(storage_list) do
-                local score = M.rule_score(st.rule, info, read_inventory_slots(st.inv))
-                if score then
+                local score = placement_score(st.rule, info, snapshot_for_index(i, st.inv), nil)
+                if score > 0 then
                     candidates[#candidates + 1] = { storage = st, index = i, score = score }
                 end
             end
@@ -1806,6 +1905,15 @@ function M.deposit_backpack()
                     end
                     if ok then
                         slots[target.slot] = { id = info.id, name = info.name, free = room - n }
+                        local snap = snapshot_for_index(cand.index, cand.storage.inv)
+                        snap[#snap + 1] = {
+                            slot = target.slot,
+                            id = info.id,
+                            name = info.name,
+                            count = n,
+                            maxStack = max_stack,
+                            categories = info.categories,
+                        }
                         left = left - n
                         total_moved = total_moved + n
                         info.count = info.count - n
@@ -2229,22 +2337,36 @@ function M.resort_nearby_storage()
         return dest_spaces[key]
     end
 
+    local resort_snapshots = {}
+    local function resort_snapshot_for(inv_obj)
+        local list = resort_snapshots[inv_obj]
+        if not list then
+            list = read_inventory_slots(inv_obj)
+            resort_snapshots[inv_obj] = list
+        end
+        return list
+    end
+
     local total_relocated = 0
     local modified_containers = {}
 
     for _, src_st in ipairs(storage_list) do
         if src_st.rule and src_st.rule.kind ~= "trash" then
-            local src_items = read_inventory_slots(src_st.inv)
+            local src_snap = resort_snapshot_for(src_st.inv)
+            local src_items = {}
+            for _, entry in ipairs(src_snap) do src_items[#src_items + 1] = entry end
             table.sort(src_items, function(a, b) return a.slot > b.slot end)
 
             for _, item in ipairs(src_items) do
-                local score_here = M.rule_score(src_st.rule, item, src_items) or 0
+                local current_src_snap = resort_snapshot_for(src_st.inv)
+                local score_here = placement_score(src_st.rule, item, current_src_snap, item.slot)
                 local best_dest, best_space, best_slot = nil, nil, nil
                 local best_score = score_here
 
                 for _, dest_st in ipairs(destinations) do
                     if dest_st.inv ~= src_st.inv then
-                        local score_there = M.rule_score(dest_st.rule, item, read_inventory_slots(dest_st.inv)) or 0
+                        local dest_snap = resort_snapshot_for(dest_st.inv)
+                        local score_there = placement_score(dest_st.rule, item, dest_snap, nil)
                         if score_there > best_score or (score_there == best_score and best_dest and dest_st.d2 < best_dest.d2 and score_there > score_here) then
                             local space = get_dest_space(dest_st)
                             local candidate_slot = nil
@@ -2300,6 +2422,22 @@ function M.resort_nearby_storage()
                             local prev_data = space.slots[target_slot]
                             local free_left = prev_data.empty and ((item.maxStack or 1) - item.count) or (prev_data.free - item.count)
                             space.slots[target_slot] = { id = item.id, name = item.name, free = math.max(0, free_left) }
+
+                            for idx, entry in ipairs(current_src_snap) do
+                                if entry.slot == item.slot then
+                                    table.remove(current_src_snap, idx)
+                                    break
+                                end
+                            end
+                            local dest_snap = resort_snapshot_for(best_dest.inv)
+                            dest_snap[#dest_snap + 1] = {
+                                slot = target_slot,
+                                id = item.id,
+                                name = item.name,
+                                count = item.count,
+                                maxStack = item.maxStack,
+                                categories = item.categories,
+                            }
 
                             modified_containers[src_st] = true
                             modified_containers[best_dest] = true
