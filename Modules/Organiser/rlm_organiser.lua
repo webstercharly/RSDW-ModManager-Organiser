@@ -247,19 +247,37 @@ local BANK_THEMES = {
     {
         id = "magic",
         label = "All: Potion",
-        name = "Alchemy & Magic",
-        categories = { "Potion", "Consumable", "Herb", "Rune", "Tome", "Vestige", "Whetstone" },
-        patterns = { "cauldron", "altar", "alchemy", "magic", "sorcery" },
+        name = "Alchemy & Potions",
+        categories = { "Potion", "Consumable", "Herb", "Tome", "Vestige", "Whetstone" },
+        patterns = { "cauldron", "alchemy", "magic" },
         station_name = "Cauldron & Alchemy Table",
+        chest_type = "Chest",
+    },
+    {
+        id = "essence",
+        label = "All: Essence",
+        name = "Essence, Anima & Shards",
+        categories = { "Essence", "Rune" },
+        patterns = { "altar", "runic", "sorcery" },
+        station_name = "Runic Altar",
+        chest_type = "Chest",
+    },
+    {
+        id = "leather",
+        label = "All: Leather",
+        name = "Leather & Textiles",
+        categories = { "Leather", "Hide", "Thread", "Cloth", "Bone" },
+        patterns = { "tanner", "loom", "spinning" },
+        station_name = "Tanner & Spinning Wheel",
         chest_type = "Chest",
     },
     {
         id = "crafting",
         label = "All: Component",
-        name = "Crafting & Leather",
-        categories = { "Bone", "Hide", "Leather", "Thread", "Cloth", "Gem", "Currency", "Essence", "Component", "Processed", "Special", "Basic", "Resource" },
-        patterns = { "tanner", "loom", "spinning", "craftingstation", "workbench" },
-        station_name = "Tanner & Loom",
+        name = "Components & Processed",
+        categories = { "Component", "Processed", "Gem", "Currency", "Special", "Basic", "Resource" },
+        patterns = { "craftingstation", "workbench" },
+        station_name = "Workbench & Crafting Table",
         chest_type = "Chest",
     },
     {
@@ -537,7 +555,7 @@ local CRAFT_INFERENCE_RULES = {
     { "Essence", { "essence", "anima", "ember", "ether", "core", "dust", "ash", "ashes", "ectoplasm", "powder" } },
     { "Processed", { "oil", "sap", "resin", "wax", "slime", "tallow", "paste", "glue", "tar", "dye", "adhesive", "naphtha", "glass", "ichor", "blood", "monoxide" } },
     { "Special", { "visage", "artifact", "curiosities", "head", "heart" } },
-    { "Component", { "limbs", "limb", "handle", "mould", "mold" } },
+    { "Component", { "limbs", "limb", "handle", "mould", "mold", "decoration", "vessel" } },
     { "Currency", { "chit", "coin", "token", "currency", "doubloon" } },
     { "Ingredient", { "flour", "sugar", "egg", "butter", "milk", "cream", "honey", "spice", "meat", "steak", "cabbage", "mushroom", "onion", "potato", "pumpkin", "tomato", "watermelon", "wheat" } },
 }
@@ -676,6 +694,16 @@ local function infer_categories_from_identity(id, name, cats)
     if n_l == "clay" or id_l == "item_resources_clay" then
         for i = #cats, 1, -1 do
             if cats[i] == "Ore" then table.remove(cats, i) end
+        end
+    end
+    if has_word_token(n_l, "wax") or has_word_token(id_words, "wax") then
+        append_unique_cat(cats, "Processed")
+        return
+    end
+    for _, kw in ipairs({ "mould", "mold", "decoration", "vessel" }) do
+        if has_word_token(n_l, kw) or has_word_token(id_words, kw) then
+            append_unique_cat(cats, "Component")
+            return
         end
     end
     for _, rule in ipairs(CRAFT_INFERENCE_RULES) do
@@ -2155,12 +2183,13 @@ local MATERIAL_FAMILY_PATTERNS = {
     { 37.50, { "herb", "flower", "leaf", "leaves", "moss", "root", "spore", "flax", "marigold", "harralander", "bitterweed", "vervain" } },
     -- Minerals, gems, alchemy & arcana
     { 31.50, { "bar", "ingot", "spike", "rivet", "nail" } },
-    { 32.50, { "upgrade core", "upgrade_core", "core", "mould", "mold" } },
+    { 32.50, { "upgrade core", "upgrade_core", "core" } },
     { 40.10, { "oil", "sap", "resin", "wax", "slime", "tallow", "paste", "adhesive", "naphtha", "glass", "ichor", "blood", "glue", "tar", "dye", "monoxide" } },
     { 40.20, { "gem", "crystal", "quartz", "amber", "pearl", "ruby", "emerald", "diamond", "sapphire", "jade", "opal", "topaz", "onyx", "dragonstone" } },
-    { 40.30, { "essence", "anima", "ember", "ether" } },
+    { 40.30, { "essence", "anima", "ember", "ether", "ectoplasm" } },
     { 40.35, { "shard", "dust", "ash", "ashes", "powder", "coal", "charcoal" } },
     { 40.50, { "rune" } },
+    { 40.90, { "limbs", "limb", "handle", "mould", "mold", "decoration", "vessel" } },
 }
 
 local function item_sort_rank(info)
@@ -2643,14 +2672,13 @@ end
 local SUB_CATEGORY_ROLES = {
     { id = "sub_metal",     label = "All: Metal",     category = "Metal",     station_theme = "ore",       min_stacks = 2 },
     { id = "sub_mineral",   label = "All: Mineral",   category = "Mineral",   station_theme = "ore",       min_stacks = 2 },
-    { id = "sub_leather",   label = "All: Leather",   category = "Leather",   station_theme = "crafting",  min_stacks = 2 },
-    { id = "sub_hide",      label = "All: Hide",      category = "Hide",      station_theme = "crafting",  min_stacks = 2 },
-    { id = "sub_thread",    label = "All: Thread",    category = "Thread",    station_theme = "crafting",  min_stacks = 2 },
-    { id = "sub_cloth",     label = "All: Cloth",     category = "Cloth",     station_theme = "crafting",  min_stacks = 2 },
-    { id = "sub_bone",      label = "All: Bone",      category = "Bone",      station_theme = "crafting",  min_stacks = 2 },
+    { id = "sub_hide",      label = "All: Hide",      category = "Hide",      station_theme = "leather",   min_stacks = 2 },
+    { id = "sub_thread",    label = "All: Thread",    category = "Thread",    station_theme = "leather",   min_stacks = 2 },
+    { id = "sub_cloth",     label = "All: Cloth",     category = "Cloth",     station_theme = "leather",   min_stacks = 2 },
+    { id = "sub_bone",      label = "All: Bone",      category = "Bone",      station_theme = "leather",   min_stacks = 2 },
     { id = "sub_herb",      label = "All: Herb",      category = "Herb",      station_theme = "magic",     min_stacks = 2 },
-    { id = "sub_essence",   label = "All: Essence",   category = "Essence",   station_theme = "crafting",  min_stacks = 2 },
-    { id = "sub_rune",      label = "All: Rune",      category = "Rune",      station_theme = "magic",     min_stacks = 2 },
+    { id = "sub_rune",      label = "All: Rune",      category = "Rune",      station_theme = "essence",   min_stacks = 2 },
+    { id = "sub_processed", label = "All: Processed", category = "Processed", station_theme = "crafting",  min_stacks = 2 },
     { id = "sub_gem",       label = "All: Gem",       category = "Gem",       station_theme = "ore",       min_stacks = 2 },
     { id = "sub_weapon",     label = "All: Weapon",     category = "Weapon",     station_theme = "equipment", min_stacks = 2 },
     { id = "sub_armour",     label = "All: Armour",     category = "Armour",     station_theme = "equipment", min_stacks = 2 },

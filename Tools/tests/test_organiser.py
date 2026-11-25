@@ -1231,9 +1231,8 @@ class OrganiserServiceTests(unittest.TestCase):
         -- 1. Starter tier (< 8 chests): uses coarse Bank Themes only
         local starter = {
             chest(1, "All: Component", {
-                st_item("ITEM_Leather1", "Soft Leather", { "Basic", "Leather" }),
-                st_item("ITEM_Leather2", "Hard Leather", { "Basic", "Leather" }),
-                st_item("ITEM_Leather3", "Cursed Leather", { "Component", "Leather" }),
+                st_item("ITEM_Bar1", "Mithril Bar", { "Component", "Metal" }),
+                st_item("ITEM_Bar2", "Adamant Bar", { "Component", "Metal" }),
             }),
             chest(2, nil, {}),
             chest(3, nil, {}),
@@ -1289,7 +1288,7 @@ class OrganiserServiceTests(unittest.TestCase):
         p_starter = self.lua.eval("_G.__PLAN_STARTER")
         self.assertEqual(p_starter["tier"], "starter")
         starter_labels = [a["label"] for a in p_starter["assignments"].values()]
-        self.assertTrue(all(lbl != "All: Leather" for lbl in starter_labels))
+        self.assertTrue(all(lbl != "All: Metal" for lbl in starter_labels))
 
         p_standard = self.lua.eval("_G.__PLAN_STANDARD")
         self.assertEqual(p_standard["tier"], "standard")
@@ -1381,8 +1380,8 @@ class OrganiserServiceTests(unittest.TestCase):
         # Bank roles & categories appear BEFORE single item names like Ash Logs / Gypsum
         self.assertEqual(suggestions[0], "All: Ore")
         self.assertIn("All: Wood", suggestions[:8])
-        self.assertIn("Misc", suggestions[:10])
-        self.assertGreater(suggestions.index("Ash Logs"), suggestions.index("All: Ore"))
+        self.assertIn("Misc", suggestions[:12])
+        self.assertGreater(suggestions.index("Ash Logs"), suggestions.index("Misc"))
 
     def test_audit_fixes_multi_category_scoring_non_storage_prune_and_demand_first_planning(self):
         self.lua.execute(r"""
@@ -2087,13 +2086,13 @@ class OrganiserServiceTests(unittest.TestCase):
         self.assertEqual(self.lua.eval("_G.__OIL_REC"), "All: Component")
         self.assertEqual(self.lua.eval("_G.__SCRAP_METAL_REC"), "All: Ore")
         self.assertEqual(self.lua.eval("_G.__SALVAGE_REC"), "All: Ore")
-        self.assertEqual(self.lua.eval("_G.__DRAGON_LEATHER_REC"), "All: Component")
+        self.assertEqual(self.lua.eval("_G.__DRAGON_LEATHER_REC"), "All: Leather")
 
     def test_catalog_resource_and_consumable_oddities_classify_cleanly(self):
         self.lua.execute(r"""
         local org = organiser_service
-        local function rec_for(id, name)
-            local item = {
+        local function make_item(id, name, tags)
+            return {
                 IsValid = function() return true end,
                 Count = 2,
                 ItemData = {
@@ -2101,8 +2100,20 @@ class OrganiserServiceTests(unittest.TestCase):
                     GetFName = function() return { ToString = function() return id end } end,
                     Name = { ToString = function() return name end },
                     MaxStackSize = 99,
+                    ItemFilterTags = tags and {
+                        GameplayTags = {
+                            ForEach = function(_, cb)
+                                for i, t in ipairs(tags) do
+                                    cb(i, { get = function() return { TagName = { ToString = function() return t end } } end })
+                                end
+                            end
+                        }
+                    } or nil,
                 },
             }
+        end
+        local function rec_for(id, name, tags)
+            local item = make_item(id, name, tags)
             local inv = {
                 IsValid = function() return true end,
                 MaxSlotCount = 20,
@@ -2112,15 +2123,20 @@ class OrganiserServiceTests(unittest.TestCase):
         end
         local cases = {
             { "ITEM_Resources_Wood_Blightwood", "Blightwood", "All: Wood" },
-            { "ITEM_Resources_Skin_Dragon_Blue_Lesser", "Blue Dragonhide", "All: Component" },
-            { "ITEM_Resources_Scale_Dragon_Blue", "Blue Dragon Scale", "All: Component" },
+            { "ITEM_Resources_Skin_Dragon_Blue_Lesser", "Blue Dragonhide", "All: Leather" },
+            { "ITEM_Resources_Scale_Dragon_Blue", "Blue Dragon Scale", "All: Leather" },
             { "ITEM_Resources_Opal", "Opal", "All: Component" },
             { "ITEM_Resources_Red_Topaz", "Red Topaz", "All: Component" },
-            { "ITEM_Resources_Fibres_Mystic", "Mystic Fibres", "All: Component" },
-            { "ITEM_Resources_T7_Upgrade_Shard", "Ascension Shard 7", "All: Component" },
-            { "ITEM_Resources_Wild_Anima", "Wild Anima", "All: Component" },
-            { "ITEM_Resources_Vault_Shard", "Vault Shard", "All: Component" },
-            { "ITEM_Resources_Vault_Core", "Vault Core", "All: Component" },
+            { "ITEM_Resources_Fibres_Mystic", "Mystic Fibres", "All: Leather" },
+            { "ITEM_Resources_T7_Upgrade_Shard", "Ascension Shard 7", "All: Essence" },
+            { "ITEM_Resources_WildAnima", "Wild Anima", "All: Essence" },
+            { "ITEM_Resources_VaultShard", "Vault Shard", "All: Essence" },
+            { "ITEM_Resources_VaultCore", "Vault Core", "All: Essence" },
+            { "ITEM_Resources_Wax_Gypsum", "Gypsum Wax", "All: Component" },
+            { "ITEM_Resources_Clay_Decoration", "Clay Decoration", "All: Component", { "ItemFilter.Material.Component" } },
+            { "ITEM_Resources_Clay_Mould", "Clay Mould", "All: Component", { "ItemFilter.Material.Component" } },
+            { "ITEM_Resources_Clay_Vessel", "Clay Vessel", "All: Component", { "ItemFilter.Material.Component" } },
+            { "ITEM_Resources_Clay", "Clay", "All: Ore", { "ItemFilter.Material.Mineral" } },
             { "ITEM_Resources_Tomato", "Tomato", "All: Food" },
             { "ITEM_Resources_Fish_Raw_Lobster", "Raw Lobster", "All: Food" },
             { "ITEM_Consumable_Fish_Lobster", "Roasted Lobster", "All: Food" },
@@ -2132,14 +2148,34 @@ class OrganiserServiceTests(unittest.TestCase):
         }
         _G.__CATALOG_MISMATCHES = {}
         for _, c in ipairs(cases) do
-            local got = rec_for(c[1], c[2])
+            local got = rec_for(c[1], c[2], c[4])
             if got ~= c[3] then
                 _G.__CATALOG_MISMATCHES[#_G.__CATALOG_MISMATCHES + 1] = c[2] .. "->" .. tostring(got) .. " (expected " .. c[3] .. ")"
             end
         end
+        local function info_for(id, name, tags)
+            local inv = {
+                IsValid = function() return true end,
+                MaxSlotCount = 5,
+                ItemSlots = { ForEach = function(_, cb) cb(1, { get = function() return make_item(id, name, tags) end }) end },
+            }
+            return org.read_slots(inv)[1]
+        end
+        local potion_rule = org.parse_label("All: Potion")
+        local mineral_rule = org.parse_label("All: Mineral")
+        _G.__ESSENCE_REJECTED_FROM_POTION =
+            org.rule_score(potion_rule, info_for("ITEM_Resources_WildAnima", "Wild Anima")) == nil
+            and org.rule_score(potion_rule, info_for("ITEM_Resources_VaultShard", "Vault Shard")) == nil
+            and org.rule_score(potion_rule, info_for("ITEM_Resources_T7_Upgrade_Shard", "Ascension Shard 7")) == nil
+        _G.__WAX_AND_CLAY_CRAFTED_NOT_MINERAL =
+            org.rule_score(mineral_rule, info_for("ITEM_Resources_Wax_Gypsum", "Gypsum Wax")) == nil
+            and org.rule_score(mineral_rule, info_for("ITEM_Resources_Clay_Decoration", "Clay Decoration", { "ItemFilter.Material.Component" })) == nil
+            and org.rule_score(mineral_rule, info_for("ITEM_Resources_Clay_Mould", "Clay Mould", { "ItemFilter.Material.Component" })) == nil
         """)
         mismatches = list(self.lua.eval("_G.__CATALOG_MISMATCHES").values())
         self.assertEqual(mismatches, [])
+        self.assertTrue(self.lua.eval("_G.__ESSENCE_REJECTED_FROM_POTION"))
+        self.assertTrue(self.lua.eval("_G.__WAX_AND_CLAY_CRAFTED_NOT_MINERAL"))
 
     def test_compare_items_slot_tiebreaker_same_id_swap_and_capacity_fitting(self):
         self.lua.globals()._TEST_ORG = self.organiser
