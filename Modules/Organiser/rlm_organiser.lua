@@ -1579,7 +1579,7 @@ end
 
 local function run_remote_sort(token, inv, ctrl, label, on_done)
     local steps_done, merges_done = 0, 0
-    local max_steps = 60
+    local max_steps = 96
 
     local function next_step()
         if token ~= remote_job_token or not remote_job or not engine.is_valid(inv) then
@@ -1685,7 +1685,7 @@ end
 local function run_remote_resort(token, storage_list, destinations, ctrl, on_done)
     local relocated = 0
     local modified = {}
-    local max_relocations = 100
+    local max_relocations = math.max(250, #storage_list * 24)
 
     local function next_step()
         if token ~= remote_job_token or not remote_job then
@@ -2705,7 +2705,8 @@ function M.plan_base_roles(all_chests, workstations, opts)
                 if cap >= demand then
                     score = score + 20
                 else
-                    score = score - 25
+                    -- Exceeds capacity: outweigh workstation proximity (+100) so large chests take busy roles.
+                    score = score - 120
                 end
                 score = score + math.min(cap, 64) * 0.4
             else

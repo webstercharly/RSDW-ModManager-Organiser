@@ -2245,10 +2245,10 @@ class OrganiserServiceTests(unittest.TestCase):
         _G.__SLOT_2_COUNT = slots[2] and slots[2].Count or 0
         _G.__SLOT_3_COUNT = slots[3] and slots[3].Count or 0
 
-        -- High-demand role chooses 64-slot chest over closer 16-slot chest; 2-stack role takes smaller chest.
+        -- High-demand role chooses 64-slot chest over closer 16-slot chest next to matching workstation.
         local chests = {
             { pos = { X = 100, Y = 0, Z = 0 }, d2 = 10000, maxSlots = 16, slots = {} },
-            { pos = { X = 400, Y = 0, Z = 0 }, d2 = 160000, maxSlots = 64, slots = {} },
+            { pos = { X = 1500, Y = 0, Z = 0 }, d2 = 2250000, maxSlots = 64, slots = {} },
         }
         for i = 3, 10 do
             chests[i] = { pos = { X = i * 100, Y = 0, Z = 0 }, d2 = i * i * 10000, maxSlots = 16, slots = {} }
@@ -2258,7 +2258,10 @@ class OrganiserServiceTests(unittest.TestCase):
         end
         chests[4].slots[1] = { id = "ITEM_Wood_Ash", name = "Ash Logs", categories = { "Wood" } }
         chests[4].slots[2] = { id = "ITEM_Wood_Oak", name = "Oak Logs", categories = { "Wood" } }
-        local plan = org.plan_base_roles(chests, {}, { force_replan = true })
+        local stations = {
+            { theme = { id = "equipment" }, pos = { X = 110, Y = 0, Z = 0 } },
+        }
+        local plan = org.plan_base_roles(chests, stations, { force_replan = true })
         for _, a in ipairs(plan.assignments or {}) do
             if a.label == "All: Equipment" then _G.__EQUIP_CAP = a.chest.maxSlots end
             if a.label == "All: Wood" then _G.__WOOD_CAP = a.chest.maxSlots end
