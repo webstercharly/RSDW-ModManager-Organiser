@@ -734,6 +734,65 @@ function M.label_of(actor)
     return stored and stored.label or nil
 end
 
+local function ufunction_param_count(path)
+    local finder = _G and _G.StaticFindObject
+    if type(finder) ~= "function" then return nil end
+    local ok, fn = pcall(finder, path)
+    if not ok or not engine.is_valid(fn) or type(fn.ForEachProperty) ~= "function" then
+        return nil
+    end
+    local count = 0
+    local iter_ok = pcall(function()
+        fn:ForEachProperty(function()
+            count = count + 1
+        end)
+    end)
+    return iter_ok and count or nil
+end
+
+local function sender_unique_id(controller)
+    local uid = safe_call(function()
+        local ps = controller and controller.PlayerState
+        return ps and ps.UniqueId or nil
+    end)
+    return uid ~= nil and uid or {}
+end
+
+local function invoke_native_rename(controller, actor, label_text)
+    local ftext = FText(label_text or "")
+    local server_params = ufunction_param_count("/Script/Dominion.DominionPlayerController:Server_SetObjectCustomName")
+    local setter = sender_unique_id(controller)
+    local ok_rename, rename_err
+    if server_params == 2 then
+        ok_rename, rename_err = pcall(function()
+            controller:Server_SetObjectCustomName(actor, ftext)
+        end)
+    else
+        ok_rename, rename_err = pcall(function()
+            controller:Server_SetObjectCustomName(actor, ftext, setter)
+        end)
+        if not ok_rename and server_params == nil then
+            ok_rename, rename_err = pcall(function()
+                controller:Server_SetObjectCustomName(actor, ftext)
+            end)
+        end
+    end
+    if not ok_rename then
+        log.warn("Organiser: chest rename RPC failed: " .. tostring(rename_err))
+        if not is_remote_client() then
+            local iface_params = ufunction_param_count("/Script/Dominion.Renameable:SetCustomName")
+            if iface_params == 1 then
+                pcall(function() actor:SetCustomName(ftext) end)
+            else
+                local ok_set = pcall(function() actor:SetCustomName(ftext, setter) end)
+                if not ok_set and iface_params == nil then
+                    pcall(function() actor:SetCustomName(ftext) end)
+                end
+            end
+        end
+    end
+end
+
 function M.set_label(controller, actor, label, opts)
     if not engine.is_valid(actor) then return false, "invalid storage actor" end
     local org = organiser_document()
@@ -745,15 +804,7 @@ function M.set_label(controller, actor, label, opts)
     local native_before = game_custom_name(actor)
     local custom_name_supported = native_before ~= nil
     if custom_name_supported and engine.is_valid(controller) then
-        local ok_rename, rename_err = pcall(function()
-            controller:Server_SetObjectCustomName(actor, FText(text or ""))
-        end)
-        if not ok_rename then
-            log.warn("Organiser: chest rename RPC failed: " .. tostring(rename_err))
-            if not is_remote_client() then
-                pcall(function() actor:SetCustomName(FText(text or "")) end)
-            end
-        end
+        invoke_native_rename(controller, actor, text)
     end
 
     local existing, index = find_stored_label(actor)

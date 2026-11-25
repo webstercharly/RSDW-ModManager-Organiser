@@ -1881,6 +1881,52 @@ class OrganiserServiceTests(unittest.TestCase):
         self.assertIsNotNone(self.lua.eval("_G.__SCORE_COMPONENT"))
         self.assertGreater(self.lua.eval("_G.__SCORE_CURRENCY"), self.lua.eval("_G.__SCORE_COMPONENT"))
 
+    def test_set_label_passes_setter_unique_id_when_three_param_rpc_present(self):
+        self.lua.execute(r"""
+        local org = organiser_service
+        local sentinel_uid = { __uid = "player-uid-sentinel" }
+        local captured = {}
+        local orig_find = _G.StaticFindObject
+        _G.StaticFindObject = function(path)
+            if path == "/Script/Dominion.DominionPlayerController:Server_SetObjectCustomName" then
+                return {
+                    IsValid = function() return true end,
+                    ForEachProperty = function(_, cb)
+                        cb({})
+                        cb({})
+                        cb({})
+                    end,
+                }
+            end
+            if orig_find then return orig_find(path) end
+            return nil
+        end
+        local pc = {
+            IsValid = function() return true end,
+            PlayerState = { UniqueId = sentinel_uid },
+            Server_SetObjectCustomName = function(self, target, new_name, setter_id)
+                assert(target ~= nil, "missing target")
+                assert(new_name ~= nil, "missing new_name")
+                assert(setter_id == sentinel_uid, "expected PlayerState.UniqueId as 3rd param")
+                captured[#captured + 1] = { target = target:GetFullName(), name = tostring(new_name), uid = setter_id }
+            end,
+        }
+        _G.FText = function(s) return tostring(s) end
+        local chest = {
+            GetAddress = function() return 901 end,
+            GetFullName = function() return "BP_BaseBuilding_Chest_Iron_C_901" end,
+            IsA = is_base_building,
+            GetCustomName = function() return { ToString = function() return "Loot Rares" end } end,
+            K2_GetActorLocation = function() return { X = 120, Y = 0, Z = 0 } end,
+        }
+        org.set_label(pc, chest, "All: Potion")
+        _G.StaticFindObject = orig_find
+        _G.__SETTER_RPC_COUNT = #captured
+        _G.__SETTER_RPC_LABEL = captured[1] and captured[1].name
+        """)
+        self.assertEqual(self.lua.eval("_G.__SETTER_RPC_COUNT"), 1)
+        self.assertEqual(self.lua.eval("_G.__SETTER_RPC_LABEL"), "All: Potion")
+
 
 if __name__ == "__main__":
     unittest.main()
