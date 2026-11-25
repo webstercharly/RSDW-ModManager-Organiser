@@ -257,9 +257,18 @@ local BANK_THEMES = {
         id = "crafting",
         label = "All: Component",
         name = "Crafting & Leather",
-        categories = { "Bone", "Hide", "Leather", "Thread", "Cloth", "Gem", "Currency", "Component", "Processed", "Seed", "Special", "Basic", "Resource" },
+        categories = { "Bone", "Hide", "Leather", "Thread", "Cloth", "Gem", "Currency", "Component", "Processed", "Special", "Basic", "Resource" },
         patterns = { "tanner", "loom", "spinning", "craftingstation", "workbench" },
         station_name = "Tanner & Loom",
+        chest_type = "Chest",
+    },
+    {
+        id = "farming",
+        label = "All: Farming",
+        name = "Farming & Seeds",
+        categories = { "Farming", "Seed" },
+        patterns = { "planter", "compost", "farm", "plot", "trough", "garden" },
+        station_name = "Planter / Farming Plot",
         chest_type = "Chest",
     },
 }
@@ -543,6 +552,7 @@ local ID_PREFIX_CATEGORIES = {
     { "^item_consumable_planpack_", "Plan" },
     { "^item_consumable_tome_", "Tome" },
     { "^item_consumable_potion_", "Potion" },
+    { "^item_farming_curediseasepotion", "Farming" },
     { "^item_farming_.*potion", "Potion" },
     { "^item_consumable_tea_", "Drink" },
     { "^item_consumable_water_", "Drink" },
@@ -553,13 +563,13 @@ local ID_PREFIX_CATEGORIES = {
     { "^item_consumable_magicfocus", "Essence" },
     { "^item_logging_axe_", "Tool" },
     { "^item_pickaxe_", "Tool" },
-    { "^item_spade_", "Tool" },
-    { "^item_wateringcan_", "Tool" },
+    { "^item_spade_", "Farming" },
+    { "^item_wateringcan_", "Farming" },
     { "^item_fishingrod_", "Tool" },
     { "^item_fishingnet_", "Tool" },
-    { "^item_secateurs_", "Tool" },
+    { "^item_secateurs_", "Farming" },
     { "^item_torch", "Tool" },
-    { "^item_bucket_", "Tool" },
+    { "^item_bucket_", "Farming" },
     { "^item_armour_", "Armour" },
     { "^item_armor_", "Armour" },
     { "^item_shield_", "Shield" },
@@ -594,14 +604,21 @@ local function infer_categories_from_identity(id, name, cats)
     local n_l = tostring(name or ""):lower()
     local id_words = id_l:gsub("_", " ")
 
-    local matched_prefix = false
+    local matched_cat = nil
     for _, entry in ipairs(ID_PREFIX_CATEGORIES) do
         if id_l:find(entry[1]) then
             append_unique_cat(cats, entry[2])
-            matched_prefix = true
+            matched_cat = entry[2]
             break
         end
     end
+    if matched_cat == "Farming" then
+        for i = #cats, 1, -1 do
+            if cats[i] == "Tool" or cats[i] == "Potion" then table.remove(cats, i) end
+        end
+        return
+    end
+    local matched_prefix = matched_cat ~= nil
 
     if not matched_prefix then
         if (id_l:find("^item_trinket_") or id_l:find("^item_jewellery_") or id_l:find("_ring_") or id_l:find("_amulet_"))
@@ -2099,6 +2116,7 @@ local CATEGORY_ORDER = {
     ["Ingredient"] = 34,
     ["Raw Fish"] = 35,
     ["Prime Fish"] = 36,
+    ["Farming"] = 36.5,
     ["Seed"] = 37,
     -- Crafting & Magic Materials (ordered by sub-family below)
     ["Bone"] = 38,
@@ -2602,18 +2620,18 @@ end
 -- Base Storage Advisor & Adaptive Bank Sorter -------------------------------
 
 local SUB_CATEGORY_ROLES = {
-    { id = "sub_metal",     label = "All: Metal",     category = "Metal",     station_theme = "ores",      min_stacks = 2 },
-    { id = "sub_mineral",   label = "All: Mineral",   category = "Mineral",   station_theme = "ores",      min_stacks = 2 },
+    { id = "sub_metal",     label = "All: Metal",     category = "Metal",     station_theme = "ore",       min_stacks = 2 },
+    { id = "sub_mineral",   label = "All: Mineral",   category = "Mineral",   station_theme = "ore",       min_stacks = 2 },
     { id = "sub_leather",   label = "All: Leather",   category = "Leather",   station_theme = "crafting",  min_stacks = 2 },
     { id = "sub_hide",      label = "All: Hide",      category = "Hide",      station_theme = "crafting",  min_stacks = 2 },
     { id = "sub_thread",    label = "All: Thread",    category = "Thread",    station_theme = "crafting",  min_stacks = 2 },
     { id = "sub_cloth",     label = "All: Cloth",     category = "Cloth",     station_theme = "crafting",  min_stacks = 2 },
     { id = "sub_bone",      label = "All: Bone",      category = "Bone",      station_theme = "crafting",  min_stacks = 2 },
     { id = "sub_herb",      label = "All: Herb",      category = "Herb",      station_theme = "magic",     min_stacks = 2 },
-    { id = "sub_seed",      label = "All: Seed",      category = "Seed",      station_theme = "crafting",  min_stacks = 2 },
+    { id = "sub_seed",      label = "All: Seed",      category = "Seed",      station_theme = "farming",   min_stacks = 2 },
     { id = "sub_essence",   label = "All: Essence",   category = "Essence",   station_theme = "magic",     min_stacks = 2 },
     { id = "sub_rune",      label = "All: Rune",      category = "Rune",      station_theme = "magic",     min_stacks = 2 },
-    { id = "sub_gem",       label = "All: Gem",       category = "Gem",       station_theme = "ores",      min_stacks = 2 },
+    { id = "sub_gem",       label = "All: Gem",       category = "Gem",       station_theme = "ore",       min_stacks = 2 },
     { id = "sub_weapon",     label = "All: Weapon",     category = "Weapon",     station_theme = "equipment", min_stacks = 2 },
     { id = "sub_armour",     label = "All: Armour",     category = "Armour",     station_theme = "equipment", min_stacks = 2 },
     { id = "sub_shield",     label = "All: Shield",     category = "Shield",     station_theme = "equipment", min_stacks = 2 },

@@ -2310,6 +2310,10 @@ class OrganiserServiceTests(unittest.TestCase):
             [7] = make_item("ITEM_Resources_Salve_Crystal", "Salve Crystal", { "Item.QuestItem" }),
             [8] = make_item("ITEM_Resources_Agility_Bronze_Leaf", "Bronze Leaf", { "ItemFilter.Material.Component", "ItemFilter.Material.Metal" }),
             [9] = make_item("ITEM_Resources_TinOre", "Tin Ore", { "ItemFilter.Material.BasicMaterial", "ItemFilter.Material.Metal", "ItemFilter.Material.Ore" }),
+            [10] = make_item("ITEM_WateringCan_Wood", "Wooden Watering Can", { "Item.Farming.ShowProgress" }),
+            [11] = make_item("ITEM_Bucket_Compost", "Compost Bucket", { "Item.Farming.ShowProgress" }),
+            [12] = make_item("ITEM_Spade_T3_Bronze", "Bronze Spade", { "ItemFilter.Type.Equipment.Tool.Shovel", "Item.Farming.ShowProgress" }),
+            [13] = make_item("ITEM_Farming_CureDiseasePotion", "Plant Cure", { "ItemFilter.Type.Consumable.Potion" }),
         }
         local open_actor = {
             GetAddress = function() return 901 end,
@@ -2334,7 +2338,7 @@ class OrganiserServiceTests(unittest.TestCase):
             IsValid = function() return true end,
             GetOwner = function() return open_actor end,
             ItemSlots = { ForEach = function(_, fn)
-                for i = 0, 9 do if slots_test[i] then fn(i + 1, { get = function() return slots_test[i] end }) end end
+                for i = 0, 13 do if slots_test[i] then fn(i + 1, { get = function() return slots_test[i] end }) end end
             end },
         }
         local other_inv = {
@@ -2379,6 +2383,24 @@ class OrganiserServiceTests(unittest.TestCase):
         _G.__SALVE_CATS = table.concat(by_name["Salve Crystal"].categories, ",")
         _G.__BRONZE_LEAF_CATS = table.concat(by_name["Bronze Leaf"].categories, ",")
         _G.__TIN_ORE_CATS = table.concat(by_name["Tin Ore"].categories, ",")
+        _G.__WATERING_CATS = table.concat(by_name["Wooden Watering Can"].categories, ",")
+        _G.__BUCKET_CATS = table.concat(by_name["Compost Bucket"].categories, ",")
+        _G.__SPADE_CATS = table.concat(by_name["Bronze Spade"].categories, ",")
+        _G.__CURE_CATS = table.concat(by_name["Plant Cure"].categories, ",")
+        _G.__FARMING_SCORE_IN_FARM = org.rule_score(org.parse_label("All: Farming"), by_name["Wooden Watering Can"])
+        _G.__SEED_SCORE_IN_FARM = org.rule_score(org.parse_label("All: Farming"), { id = "ITEM_Seed", name = "Flax Seed", categories = { "Seed" } })
+
+        local plot_actor = {
+            GetAddress = function() return 950 end,
+            GetFullName = function() return "BP_BaseBuilding_PlanterBox_C_950" end,
+            K2_GetActorLocation = function() return { X = 2900, Y = 0, Z = 0 } end,
+        }
+        _G.FindAllOf = function(cls)
+            if cls == "BaseBuildingActor" then return { plot_actor } end
+            return {}
+        end
+        local detected = org.detect_workstations({ X = 0, Y = 0, Z = 0 }, 40)
+        _G.__DETECTED_FARM_THEME = detected[1] and detected[1].theme and detected[1].theme.id or nil
         """)
         self.assertEqual(self.lua.eval("_G.__REACHABLE_COUNT"), 1)
         self.assertEqual(self.lua.eval("_G.__REACHABLE_ADDR"), 901)
@@ -2392,6 +2414,13 @@ class OrganiserServiceTests(unittest.TestCase):
         self.assertEqual(self.lua.eval("_G.__SALVE_CATS"), "Quest")
         self.assertEqual(self.lua.eval("_G.__BRONZE_LEAF_CATS"), "Component,Metal")
         self.assertEqual(self.lua.eval("_G.__TIN_ORE_CATS"), "Basic,Ore")
+        self.assertEqual(self.lua.eval("_G.__WATERING_CATS"), "Farming")
+        self.assertEqual(self.lua.eval("_G.__BUCKET_CATS"), "Farming")
+        self.assertEqual(self.lua.eval("_G.__SPADE_CATS"), "Farming")
+        self.assertEqual(self.lua.eval("_G.__CURE_CATS"), "Farming")
+        self.assertEqual(self.lua.eval("_G.__FARMING_SCORE_IN_FARM"), 2)
+        self.assertEqual(self.lua.eval("_G.__SEED_SCORE_IN_FARM"), 1.5)
+        self.assertEqual(self.lua.eval("_G.__DETECTED_FARM_THEME"), "farming")
 
 
 if __name__ == "__main__":
