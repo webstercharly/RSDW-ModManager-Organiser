@@ -2137,6 +2137,144 @@ class OrganiserServiceTests(unittest.TestCase):
         mismatches = list(self.lua.eval("_G.__CATALOG_MISMATCHES").values())
         self.assertEqual(mismatches, [])
 
+    def test_compare_items_slot_tiebreaker_same_id_swap_and_capacity_fitting(self):
+        self.lua.globals()._TEST_ORG = self.organiser
+        self.lua.execute(r"""
+        local org = _TEST_ORG
+        local s4 = { id = "ITEM_Resources_Coal", name = "Coal", count = 99, slot = 4, categories = { "Component", "Ore" } }
+        local s5 = { id = "ITEM_Resources_Coal", name = "Coal", count = 99, slot = 5, categories = { "Component", "Ore" } }
+        _G.__TIE_4_5 = org.compare_items(s4, s5)
+        _G.__TIE_5_4 = org.compare_items(s5, s4)
+
+        local ichor = { id = "ITEM_Resources_Ichor", name = "Kalphite Ichor", count = 5, slot = 2, categories = { "Processed", "Component" } }
+        local blood = { id = "ITEM_Resources_Blood", name = "Dragon Blood", count = 5, slot = 1, categories = { "Processed", "Component" } }
+        local jade = { id = "ITEM_Resources_Jade", name = "Jade", count = 5, slot = 3, categories = { "Gem", "Component" } }
+        _G.__ICHOR_BEFORE_JADE = org.compare_items(ichor, jade)
+        _G.__BLOOD_BEFORE_ICHOR = org.compare_items(blood, ichor)
+
+        -- Verify remote sort handles same-ID swap (Coal 99 <-> Coal 93) with 1.2s server latency
+        -- and does NOT churn identical Coal 99 stacks.
+        package.loaded.rlm_engine.local_generation_allowed = function() return false, "RemoteClient" end
+        _G.__ASYNC_QUEUE = {}
+        local t = 100.0
+        package.loaded.rlm_engine.real_time_seconds = function() return t end
+        package.loaded.rlm_async = {
+            after = function(delay, fn)
+                _G.__ASYNC_QUEUE[#_G.__ASYNC_QUEUE + 1] = { due = t + (delay or 0), fn = fn }
+                return true
+            end,
+        }
+        if package.loaded.rlm_organiser_hud then
+            package.loaded.rlm_organiser_hud.set_status = function(txt) _G.__LAST_STATUS = txt end
+        end
+
+        local function make_item(id, name, cat, count)
+            return {
+                IsValid = function() return true end,
+                Count = count,
+                ItemData = {
+                    IsValid = function() return true end,
+                    Name = { ToString = function() return name end },
+                    MaxStackSize = 99,
+                    GetFName = function() return { ToString = function() return id end } end,
+                    ItemFilterTags = { GameplayTags = { ForEach = function(_, fn)
+                        fn(nil, { get = function() return { TagName = { ToString = function() return "ItemFilter.Material." .. cat end } } end })
+                    end } },
+                },
+            }
+        end
+        local slots = {
+            [0] = make_item("ITEM_Resources_Coal", "Coal", "Ore", 99),
+            [1] = make_item("ITEM_Resources_Coal", "Coal", "Ore", 99),
+            [2] = make_item("ITEM_Resources_Coal", "Coal", "Ore", 50),
+            [3] = make_item("ITEM_Resources_Coal", "Coal", "Ore", 40),
+        }
+        local chest_actor = {
+            GetAddress = function() return 411 end,
+            GetFullName = function() return "BP_BaseBuilding_Chest_Iron_C_411" end,
+            IsA = is_base_building,
+            K2_GetActorLocation = function() return { X = 100, Y = 0, Z = 0 } end,
+            LinkedInventoryComponent = { IsValid = function() return true end, bIsLocked = false },
+            OwnershipComponent = { IsValid = function() return true end, bIsPrivatelyOwned = false },
+        }
+        local chest_inv = {
+            MaxSlotCount = 10,
+            IsValid = function() return true end,
+            GetOwner = function() return chest_actor end,
+            GetItemFromSlot = function(_, s) return slots[s] end,
+            GetNumItemsInSlot = function(_, s) return slots[s] and slots[s].Count or 0 end,
+            ItemSlots = { ForEach = function(_, fn)
+                for i = 0, 9 do if slots[i] then fn(i + 1, { get = function() return slots[i] end }) end end
+            end },
+        }
+        local rpc_count = 0
+        local apply_at = nil
+        local pending_move = nil
+        local ctrl = {
+            MoveItemBetweenInventories = function(_, src_inv, src_slot, dst_inv, dst_slot)
+                rpc_count = rpc_count + 1
+                pending_move = { src = src_slot, dst = dst_slot }
+                -- Replicate after 1.15s (previously timed out at 1.00s!)
+                apply_at = t + 1.15
+                return true
+            end,
+            SplitAndPutStack = function(_, src_inv, src_slot, amt, dst_inv, dst_slot)
+                rpc_count = rpc_count + 1
+                pending_move = { src = src_slot, dst = dst_slot, amt = amt }
+                apply_at = t + 1.15
+                return true
+            end,
+        }
+        local ok = org.sort_storage(chest_inv, ctrl)
+        _G.__SORT_OK = ok
+        local steps = 0
+        while #_G.__ASYNC_QUEUE > 0 and steps < 40 do
+            steps = steps + 1
+            table.sort(_G.__ASYNC_QUEUE, function(a, b) return a.due < b.due end)
+            local ev = table.remove(_G.__ASYNC_QUEUE, 1)
+            t = ev.due
+            if pending_move and apply_at and t >= apply_at then
+                slots[pending_move.dst].Count = slots[pending_move.dst].Count + slots[pending_move.src].Count
+                slots[pending_move.src] = nil
+                pending_move = nil
+                apply_at = nil
+            end
+            ev.fn()
+        end
+        _G.__SORT_RPCS = rpc_count
+        _G.__SLOT_2_COUNT = slots[2] and slots[2].Count or 0
+        _G.__SLOT_3_COUNT = slots[3] and slots[3].Count or 0
+
+        -- High-demand role chooses 64-slot chest over closer 16-slot chest; 2-stack role takes smaller chest.
+        local chests = {
+            { pos = { X = 100, Y = 0, Z = 0 }, d2 = 10000, maxSlots = 16, slots = {} },
+            { pos = { X = 400, Y = 0, Z = 0 }, d2 = 160000, maxSlots = 64, slots = {} },
+        }
+        for i = 3, 10 do
+            chests[i] = { pos = { X = i * 100, Y = 0, Z = 0 }, d2 = i * i * 10000, maxSlots = 16, slots = {} }
+        end
+        for k = 1, 18 do
+            chests[3].slots[#chests[3].slots + 1] = { id = "ITEM_Sword_" .. k, name = "Sword " .. k, categories = { "Weapon" } }
+        end
+        chests[4].slots[1] = { id = "ITEM_Wood_Ash", name = "Ash Logs", categories = { "Wood" } }
+        chests[4].slots[2] = { id = "ITEM_Wood_Oak", name = "Oak Logs", categories = { "Wood" } }
+        local plan = org.plan_base_roles(chests, {}, { force_replan = true })
+        for _, a in ipairs(plan.assignments or {}) do
+            if a.label == "All: Equipment" then _G.__EQUIP_CAP = a.chest.maxSlots end
+            if a.label == "All: Wood" then _G.__WOOD_CAP = a.chest.maxSlots end
+        end
+        """)
+        self.assertTrue(self.lua.eval("_G.__TIE_4_5"))
+        self.assertFalse(self.lua.eval("_G.__TIE_5_4"))
+        self.assertTrue(self.lua.eval("_G.__ICHOR_BEFORE_JADE"))
+        self.assertTrue(self.lua.eval("_G.__BLOOD_BEFORE_ICHOR"))
+        self.assertTrue(self.lua.eval("_G.__SORT_OK"))
+        self.assertEqual(self.lua.eval("_G.__SORT_RPCS"), 1)
+        self.assertEqual(self.lua.eval("_G.__SLOT_2_COUNT"), 90)
+        self.assertEqual(self.lua.eval("_G.__SLOT_3_COUNT"), 0)
+        self.assertEqual(self.lua.eval("_G.__EQUIP_CAP"), 64)
+        self.assertEqual(self.lua.eval("_G.__WOOD_CAP"), 16)
+
 
 if __name__ == "__main__":
     unittest.main()

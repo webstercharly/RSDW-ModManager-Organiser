@@ -1423,13 +1423,14 @@ local function execute_remote_transfer(token, ctrl, src_inv, src_slot, dst_inv, 
         return
     end
 
+    local same_id_non_split = (not split) and dst_count_before > 0 and dst_id_before == src_id_before
     local swaps_slots = dst_count_before > 0 and dst_id_before ~= src_id_before
     local expected_src_count = swaps_slots and dst_count_before or before - moved_count
     local expected_src_id = swaps_slots and dst_id_before
         or (expected_src_count > 0 and src_id_before or nil)
     local expected_dst_count = moved_count + (swaps_slots and 0 or dst_count_before)
     local started = engine.real_time_seconds()
-    local deadline = started + 1.0
+    local deadline = started + 2.0
     local delay = 0.18
     local checks = 0
 
@@ -1443,16 +1444,24 @@ local function execute_remote_transfer(token, ctrl, src_inv, src_slot, dst_inv, 
         end
         checks = checks + 1
         local src_id_after, after = slot_snapshot_at(src_inv, src_slot)
-        if after == expected_src_count and (after == 0 or src_id_after == expected_src_id) then
-            local dst_id_after, dst_count_after = slot_snapshot_at(dst_inv, dst_slot)
-            if dst_id_after == src_id_before and dst_count_after == expected_dst_count then
-                -- Plan the next move on a fresh scheduler pass.
-                local queued, queue_error = async.after(0, function()
-                    if token == remote_job_token and remote_job then on_done(true) end
-                end)
-                if not queued then on_done(false, tostring(queue_error)) end
-                return
-            end
+        local dst_id_after, dst_count_after = slot_snapshot_at(dst_inv, dst_slot)
+        local confirmed = false
+        if same_id_non_split then
+            local changed = (after ~= before or dst_count_after ~= dst_count_before)
+            local conserved = (after + dst_count_after) == (before + dst_count_before)
+            confirmed = changed and conserved
+                and (after == 0 or src_id_after == src_id_before)
+                and dst_id_after == src_id_before
+        elseif after == expected_src_count and (after == 0 or src_id_after == expected_src_id) then
+            confirmed = (dst_id_after == src_id_before and dst_count_after == expected_dst_count)
+        end
+        if confirmed then
+            -- Plan the next move on a fresh scheduler pass.
+            local queued, queue_error = async.after(0, function()
+                if token == remote_job_token and remote_job then on_done(true) end
+            end)
+            if not queued then on_done(false, tostring(queue_error)) end
+            return
         end
         if now >= deadline or checks >= 4 then
             log.warn(("Organiser transfer unconfirmed after %.0f ms (%d checks)")
@@ -2063,13 +2072,13 @@ local CATEGORY_ORDER = {
 
 local MATERIAL_FAMILY_PATTERNS = {
     -- Animal parts & leathercraft
-    { 38.05, { "bone", "skull", "spine" } },
-    { 38.15, { "horn", "antler", "fang", "claw", "tusk", "talon" } },
+    { 38.05, { "bone", "bonemeal", "skull", "spine", "tooth" } },
+    { 38.15, { "horn", "antler", "fang", "claw", "tusk", "talon", "wing" } },
     { 38.25, { "feather", "scale", "shell", "chitin", "carapace" } },
-    { 38.40, { "pelt", "hide", "fur", "fleece" } },
+    { 38.40, { "pelt", "hide", "dragonhide", "fur", "fleece", "skin" } },
     { 38.60, { "leather" } },
     -- Textiles
-    { 39.10, { "thread", "yarn", "twine", "string", "cord", "wool" } },
+    { 39.10, { "thread", "yarn", "twine", "string", "cord", "wool", "fibre", "fibres", "fibrous", "cactus" } },
     { 39.20, { "cloth", "linen", "silk", "fabric", "weave" } },
     { 39.80, { "chit", "coin", "token", "currency", "doubloon" } },
     -- Botanical
@@ -2077,8 +2086,8 @@ local MATERIAL_FAMILY_PATTERNS = {
     -- Minerals, gems, alchemy & arcana
     { 31.50, { "bar", "ingot", "spike", "rivet", "nail" } },
     { 32.50, { "upgrade core", "upgrade_core", "core", "mould", "mold" } },
-    { 40.10, { "oil", "sap", "resin", "wax", "slime", "tallow", "paste" } },
-    { 40.20, { "gem", "crystal", "quartz", "amber", "pearl", "ruby", "emerald", "diamond", "sapphire" } },
+    { 40.10, { "oil", "sap", "resin", "wax", "slime", "tallow", "paste", "adhesive", "naphtha", "glass", "ichor", "blood", "glue", "tar", "dye", "monoxide" } },
+    { 40.20, { "gem", "crystal", "quartz", "amber", "pearl", "ruby", "emerald", "diamond", "sapphire", "jade", "opal", "topaz", "onyx", "dragonstone" } },
     { 40.30, { "essence", "anima", "ember", "ether" } },
     { 40.35, { "shard", "dust", "ash", "ashes", "powder", "coal", "charcoal" } },
     { 40.50, { "rune" } },
@@ -2123,7 +2132,10 @@ function M.compare_items(a, b)
     local count_a = tonumber(a.count) or 0
     local count_b = tonumber(b.count) or 0
     if count_a ~= count_b then return count_a > count_b end
-    return tostring(a.id or "") < tostring(b.id or "")
+    local id_a = tostring(a.id or "")
+    local id_b = tostring(b.id or "")
+    if id_a ~= id_b then return id_a < id_b end
+    return (tonumber(a.slot) or math.huge) < (tonumber(b.slot) or math.huge)
 end
 
 function M.sort_storage(inv, ctrl)
@@ -2642,14 +2654,28 @@ function M.plan_base_roles(all_chests, workstations, opts)
     for _, c in ipairs(free_chests) do available[#available + 1] = c end
 
     local station_range_sq = (10 * 100) * (10 * 100)
-    local function pick_best_chest(match_cats, station_theme_id, exact_item_name)
+    local function pick_best_chest(match_cats, station_theme_id, exact_item_name, expected_demand)
         if #available == 0 then return nil end
         local best_idx = 1
         local best_score = -math.huge
         local best_d2 = math.huge
+        local demand = tonumber(expected_demand) or 0
 
         for idx, chest in ipairs(available) do
             local score = 0
+            local cap = tonumber(chest.maxSlots) or 20
+            -- Fit large/busy categories onto 48/64-slot chests and keep light roles on smaller chests.
+            if demand >= 10 then
+                if cap >= demand then
+                    score = score + 20
+                else
+                    score = score - 25
+                end
+                score = score + math.min(cap, 64) * 0.4
+            else
+                if demand > 0 and cap >= demand then score = score + 4 end
+                score = score + (64 - math.min(cap, 64)) * 0.15
+            end
             if station_theme_id and chest.pos then
                 for _, ws in ipairs(workstations) do
                     if ws.theme and ws.theme.id == station_theme_id then
@@ -2661,18 +2687,20 @@ function M.plan_base_roles(all_chests, workstations, opts)
                     end
                 end
             end
+            local item_bonus = 0
             for _, item in ipairs(chest.slots or {}) do
                 if exact_item_name and tostring(item.name or ""):lower() == exact_item_name:lower() then
-                    score = score + 12
+                    item_bonus = item_bonus + 12
                 elseif match_cats then
                     for _, cat in ipairs(item.categories or {}) do
                         if match_cats[cat:lower()] then
-                            score = score + 5
+                            item_bonus = item_bonus + 5
                             break
                         end
                     end
                 end
             end
+            score = score + math.min(item_bonus, 25)
             local d2 = chest.d2 or math.huge
             if score > best_score or (score == best_score and d2 < best_d2) then
                 best_score = score
@@ -2732,7 +2760,7 @@ function M.plan_base_roles(all_chests, workstations, opts)
         if #available == 0 then break end
         local low = req.theme.label:lower()
         if (role_counts[low] or 0) == 0 and (req.demand > 0 or req.has_station) then
-            local chest = pick_best_chest(req.cat_set, req.theme.id, nil)
+            local chest = pick_best_chest(req.cat_set, req.theme.id, nil, req.demand)
             if chest then
                 assign_chest(chest, req.theme.label, 1, "Core bank role")
             end
@@ -2757,7 +2785,7 @@ function M.plan_base_roles(all_chests, workstations, opts)
         for _, cand in ipairs(sub_candidates) do
             if #available == 0 then break end
             local cat_set = { [cand.sub.category:lower()] = true }
-            local chest = pick_best_chest(cat_set, cand.sub.station_theme, nil)
+            local chest = pick_best_chest(cat_set, cand.sub.station_theme, nil, cand.demand)
             if chest then
                 assign_chest(chest, cand.sub.label, 2,
                     string.format("%d %s stack(s) in base", cand.demand, cand.sub.category))
@@ -2778,7 +2806,7 @@ function M.plan_base_roles(all_chests, workstations, opts)
             if rec.stacks >= bulk_threshold and #rec.name <= NAME_LIMIT then
                 local low = rec.name:lower()
                 if (role_counts[low] or 0) == 0 and not low:find("^all:") and low ~= "misc" and low ~= "trash" then
-                    local chest = pick_best_chest(nil, nil, rec.name)
+                    local chest = pick_best_chest(nil, nil, rec.name, rec.stacks)
                     if chest then
                         assign_chest(chest, rec.name, 3, string.format("%d stacks need dedicated storage", rec.stacks))
                     end
@@ -2792,7 +2820,7 @@ function M.plan_base_roles(all_chests, workstations, opts)
             local demand = cat_demand[sub.category:lower()] or 0
             local cap = role_capacity[low] or 0
             if cap > 0 and demand > math.floor(cap * 0.75) and (role_counts[low] or 0) < 4 then
-                local chest = pick_best_chest({ [sub.category:lower()] = true }, sub.station_theme, nil)
+                local chest = pick_best_chest({ [sub.category:lower()] = true }, sub.station_theme, nil, math.max(1, demand - cap))
                 if chest then
                     assign_chest(chest, sub.label, 3,
                         string.format("Overflow capacity (%d/%d slots demanded)", demand, cap))
@@ -2805,7 +2833,7 @@ function M.plan_base_roles(all_chests, workstations, opts)
             local low = req.theme.label:lower()
             local cap = role_capacity[low] or 0
             if cap > 0 and req.demand > math.floor(cap * 0.75) and (role_counts[low] or 0) < 4 then
-                local chest = pick_best_chest(req.cat_set, req.theme.id, nil)
+                local chest = pick_best_chest(req.cat_set, req.theme.id, nil, math.max(1, req.demand - cap))
                 if chest then
                     assign_chest(chest, req.theme.label, 3,
                         string.format("Overflow capacity (%d/%d slots demanded)", req.demand, cap))
