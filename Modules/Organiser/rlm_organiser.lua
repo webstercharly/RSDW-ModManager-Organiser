@@ -508,10 +508,11 @@ local SKIP_CRAFT_INFERENCE = {
     cape = true, tool = true, ammo = true, potion = true,
     food = true, drink = true, tome = true, plan = true,
     pattern = true, vestige = true, whetstone = true, quest = true,
-    ["raw fish"] = true, ["prime fish"] = true,
+    seed = true, ["raw fish"] = true, ["prime fish"] = true,
 }
 
 local CRAFT_INFERENCE_RULES = {
+    { "Seed", { "seed" } },
     { "Ore", { "ore" } },
     { "Metal", { "metal", "bar", "ingot", "spike", "rivet", "salvage", "shrapnel" } },
     { "Mineral", { "stone", "gypsum", "sandstone", "clay", "limestone", "granite", "obsidian", "coal", "charcoal", "flint", "salt", "sulphur", "sulfur", "lime", "pellet" } },
@@ -522,7 +523,6 @@ local CRAFT_INFERENCE_RULES = {
     { "Cloth", { "cloth", "linen", "silk", "fabric" } },
     { "Bone", { "bone", "bonemeal", "skull", "spine", "horn", "antler", "fang", "claw", "tusk", "talon", "feather", "chitin", "carapace", "scale", "shell", "wing", "tooth" } },
     { "Herb", { "herb", "flower", "leaf", "leaves", "moss", "root", "spore", "flax", "marigold", "harralander", "bitterweed", "vervain", "avantoe", "weed", "weeds" } },
-    { "Seed", { "seed" } },
     { "Gem", { "gem", "crystal", "amber", "quartz", "sapphire", "emerald", "ruby", "diamond", "jade", "opal", "topaz", "onyx", "dragonstone" } },
     { "Essence", { "essence", "anima", "ember", "ether", "core", "dust", "ash", "ashes", "ectoplasm", "powder" } },
     { "Processed", { "oil", "sap", "resin", "wax", "slime", "tallow", "paste", "glue", "tar", "dye", "adhesive", "naphtha", "glass", "ichor", "blood", "monoxide" } },
@@ -642,11 +642,21 @@ local function infer_categories_from_identity(id, name, cats)
         append_unique_cat(cats, "Currency")
         return
     end
+    if n_l == "clay" or id_l == "item_resources_clay" then
+        for i = #cats, 1, -1 do
+            if cats[i] == "Ore" then table.remove(cats, i) end
+        end
+    end
     for _, rule in ipairs(CRAFT_INFERENCE_RULES) do
         local cat_name, kws = rule[1], rule[2]
         for _, kw in ipairs(kws) do
             if has_word_token(n_l, kw) or has_word_token(id_words, kw) then
                 append_unique_cat(cats, cat_name)
+                if cat_name == "Bone" then
+                    for i = #cats, 1, -1 do
+                        if cats[i] == "Mineral" then table.remove(cats, i) end
+                    end
+                end
                 return
             end
         end
@@ -810,6 +820,16 @@ local function is_private_locked_from_local(ownership)
     return true
 end
 
+local function is_local_open_actor(actor, opts)
+    if type(opts) ~= "table" or not opts.open_actor then return false end
+    if actor == opts.open_actor then return true end
+    if opts.open_addr ~= nil then
+        local addr = safe_call(function() return actor:GetAddress() end)
+        if addr ~= nil and addr == opts.open_addr then return true end
+    end
+    return false
+end
+
 local function is_built_storage(actor, settings, opts)
     if not engine.is_valid(actor) or is_default_object(actor) then return false end
     if not engine.is_valid(base_building_class) then
@@ -827,7 +847,8 @@ local function is_built_storage(actor, settings, opts)
 
     local linked = safe_call(function() return actor.LinkedInventoryComponent end)
     if engine.is_valid(linked) then
-        if safe_call(function() return linked.bIsLocked end, false) == true then
+        if safe_call(function() return linked.bIsLocked end, false) == true
+            and not is_local_open_actor(actor, opts) then
             return false
         end
     elseif is_remote_client() and has_world_linked_storage() then
@@ -1069,35 +1090,50 @@ function M.all_storage_in_reach(origin, settings)
     local max_range = (settings and settings.rangeMeters or 40) * 100
     local reach_squared = max_range * max_range
 
+    local open_inv, open_actor = M.open_storage()
+    local open_addr = open_actor and safe_call(function() return open_actor:GetAddress() end) or nil
+    local storage_opts = open_actor and { open_actor = open_actor, open_addr = open_addr } or nil
+
     local results = {}
-    local invs = safe_call(function() return FindAllOf("InventoryComponent") end, {})
-    for _, inv in ipairs(invs) do
-        if engine.is_valid(inv) and not is_default_object(inv) then
-            local actor = safe_call(function() return inv:GetOwner() end)
-            if is_built_storage(actor, settings) then
-                local pos = actor_position(actor)
-                local d2 = distance_squared(origin, pos)
-                if d2 <= reach_squared then
-                    local native_name = game_custom_name(actor)
-                    local label = M.label_of(actor)
-                    local rule = M.parse_label(label)
-                    local slots = read_inventory_slots(inv)
-                    local max_slots = tonumber(safe_call(function() return inv.MaxSlotCount end, 0)) or #slots
-                    results[#results + 1] = {
-                        actor = actor,
-                        inv = inv,
-                        native_name = native_name,
-                        label = label,
-                        rule = rule,
-                        distance = math.sqrt(d2) / 100,
-                        d2 = d2,
-                        pos = pos,
-                        slots = slots,
-                        maxSlots = max_slots,
-                    }
-                end
+    local seen_actors = {}
+    local function try_add(inv, actor)
+        if not engine.is_valid(inv) or is_default_object(inv) then return end
+        local key = safe_call(function() return actor and actor:GetAddress() end) or actor
+        if key and seen_actors[key] then return end
+        if is_built_storage(actor, settings, storage_opts) then
+            local pos = actor_position(actor)
+            local d2 = distance_squared(origin, pos)
+            if d2 <= reach_squared then
+                if key then seen_actors[key] = true end
+                local native_name = game_custom_name(actor)
+                local label = M.label_of(actor)
+                local rule = M.parse_label(label)
+                local slots = read_inventory_slots(inv)
+                local max_slots = tonumber(safe_call(function() return inv.MaxSlotCount end, 0)) or #slots
+                results[#results + 1] = {
+                    actor = actor,
+                    inv = inv,
+                    native_name = native_name,
+                    label = label,
+                    rule = rule,
+                    distance = math.sqrt(d2) / 100,
+                    d2 = d2,
+                    pos = pos,
+                    slots = slots,
+                    maxSlots = max_slots,
+                }
             end
         end
+    end
+
+    local invs = safe_call(function() return FindAllOf("InventoryComponent") end, {})
+    for _, inv in ipairs(invs) do
+        local actor = engine.is_valid(inv) and not is_default_object(inv)
+            and safe_call(function() return inv:GetOwner() end) or nil
+        if actor then try_add(inv, actor) end
+    end
+    if open_inv and open_actor then
+        try_add(open_inv, open_actor)
     end
     table.sort(results, function(a, b) return a.d2 < b.d2 end)
     return results

@@ -2275,6 +2275,103 @@ class OrganiserServiceTests(unittest.TestCase):
         self.assertEqual(self.lua.eval("_G.__EQUIP_CAP"), 64)
         self.assertEqual(self.lua.eval("_G.__WOOD_CAP"), 16)
 
+    def test_open_self_locked_chest_included_and_dragon_tooth_clay_seed_tags_cleaned(self):
+        self.lua.globals()._TEST_ORG = self.organiser
+        self.lua.execute(r"""
+        local org = _TEST_ORG
+        local function make_item(id, name, tags)
+            return {
+                IsValid = function() return true end,
+                Count = 5,
+                ItemData = {
+                    IsValid = function() return true end,
+                    Name = { ToString = function() return name end },
+                    MaxStackSize = 99,
+                    GetFName = function() return { ToString = function() return id end } end,
+                    ItemFilterTags = { GameplayTags = { ForEach = function(_, fn)
+                        for _, t in ipairs(tags or {}) do
+                            fn(nil, { get = function() return { TagName = { ToString = function() return t end } } end })
+                        end
+                    end } },
+                },
+            }
+        end
+        local slots_test = {
+            [0] = make_item("ITEM_Resources_Dragon_Tooth", "Dragon Tooth", { "ItemFilter.Material.BasicMaterial", "ItemFilter.Material.Mineral" }),
+            [1] = make_item("ITEM_Resources_Clay", "Clay", { "ItemFilter.Material.BasicMaterial", "ItemFilter.Material.Mineral", "ItemFilter.Material.Ore" }),
+            [2] = make_item("ITEM_Resources_Seeds_Cactus_Barrel", "Barrel Cactus Seeds", { "ItemFilter.Type.Seed" }),
+            [3] = make_item("ITEM_Resources_Seeds_Weed", "Desert Weed Seeds", { "ItemFilter.Type.Seed" }),
+        }
+        local open_actor = {
+            GetAddress = function() return 901 end,
+            GetFullName = function() return "BP_BaseBuilding_Chest_Iron_C_901" end,
+            IsA = is_base_building,
+            K2_GetActorLocation = function() return { X = 100, Y = 0, Z = 0 } end,
+            GetCustomName = function() return { ToString = function() return "All: Ore" end } end,
+            LinkedInventoryComponent = { IsValid = function() return true end, bIsLocked = true },
+            OwnershipComponent = { IsValid = function() return true end, bIsPrivatelyOwned = false },
+        }
+        local other_locked_actor = {
+            GetAddress = function() return 902 end,
+            GetFullName = function() return "BP_BaseBuilding_Chest_Iron_C_902" end,
+            IsA = is_base_building,
+            K2_GetActorLocation = function() return { X = 200, Y = 0, Z = 0 } end,
+            GetCustomName = function() return { ToString = function() return "All: Wood" end } end,
+            LinkedInventoryComponent = { IsValid = function() return true end, bIsLocked = true },
+            OwnershipComponent = { IsValid = function() return true end, bIsPrivatelyOwned = false },
+        }
+        local open_inv = {
+            MaxSlotCount = 64,
+            IsValid = function() return true end,
+            GetOwner = function() return open_actor end,
+            ItemSlots = { ForEach = function(_, fn)
+                for i = 0, 3 do if slots_test[i] then fn(i + 1, { get = function() return slots_test[i] end }) end end
+            end },
+        }
+        local other_inv = {
+            MaxSlotCount = 64,
+            IsValid = function() return true end,
+            GetOwner = function() return other_locked_actor end,
+            ItemSlots = { ForEach = function() end },
+        }
+        local panel = {
+            IsValid = function() return true end,
+            GetFullName = function() return "WBP_WorldActorInventory_MainPanel_C_1" end,
+            IsActivated = function() return true end,
+            IsVisible = function() return true end,
+            WorldInventoryManagerAPI = {
+                IsValid = function() return true end,
+                GetInventoryComponent = function() return open_inv end,
+            },
+        }
+        _G.FindFirstOf = function(cls)
+            if cls == "LinkedInventoryComponent" then return open_actor.LinkedInventoryComponent end
+            return nil
+        end
+        _G.FindAllOf = function(cls)
+            if cls == "WorldActorInventoryMainPanel" then return { panel } end
+            if cls == "InventoryComponent" then return { other_inv } end
+            return {}
+        end
+        local reachable = org.all_storage_in_reach({ X = 0, Y = 0, Z = 0 }, { rangeMeters = 40, anyStorage = true })
+        _G.__REACHABLE_COUNT = #reachable
+        _G.__REACHABLE_ADDR = reachable[1] and reachable[1].actor.GetAddress() or nil
+
+        local parsed = org.read_slots(open_inv)
+        local by_name = {}
+        for _, it in ipairs(parsed) do by_name[it.name] = it end
+        _G.__TOOTH_CATS = table.concat(by_name["Dragon Tooth"].categories, ",")
+        _G.__CLAY_CATS = table.concat(by_name["Clay"].categories, ",")
+        _G.__CACTUS_SEED_CATS = table.concat(by_name["Barrel Cactus Seeds"].categories, ",")
+        _G.__WEED_SEED_CATS = table.concat(by_name["Desert Weed Seeds"].categories, ",")
+        """)
+        self.assertEqual(self.lua.eval("_G.__REACHABLE_COUNT"), 1)
+        self.assertEqual(self.lua.eval("_G.__REACHABLE_ADDR"), 901)
+        self.assertEqual(self.lua.eval("_G.__TOOTH_CATS"), "Basic,Bone")
+        self.assertEqual(self.lua.eval("_G.__CLAY_CATS"), "Basic,Mineral")
+        self.assertEqual(self.lua.eval("_G.__CACTUS_SEED_CATS"), "Seed")
+        self.assertEqual(self.lua.eval("_G.__WEED_SEED_CATS"), "Seed")
+
 
 if __name__ == "__main__":
     unittest.main()
