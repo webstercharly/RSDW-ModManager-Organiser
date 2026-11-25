@@ -2307,6 +2307,9 @@ class OrganiserServiceTests(unittest.TestCase):
             [4] = make_item("ITEM_Resources_Steak_Cactus", "Cactus Steak", { "ItemFilter.Material.BasicMaterial" }),
             [5] = make_item("ITEM_Resources_Fibers_Cactus", "Cactus Fibres", { "ItemFilter.Material.ProcessedMaterial" }),
             [6] = make_item("ITEM_Rune_Essence", "Rune Essence", { "ItemFilter.Material.BasicMaterial" }),
+            [7] = make_item("ITEM_Resources_Salve_Crystal", "Salve Crystal", { "Item.QuestItem" }),
+            [8] = make_item("ITEM_Resources_Agility_Bronze_Leaf", "Bronze Leaf", { "ItemFilter.Material.Component", "ItemFilter.Material.Metal" }),
+            [9] = make_item("ITEM_Resources_TinOre", "Tin Ore", { "ItemFilter.Material.BasicMaterial", "ItemFilter.Material.Metal", "ItemFilter.Material.Ore" }),
         }
         local open_actor = {
             GetAddress = function() return 901 end,
@@ -2331,7 +2334,7 @@ class OrganiserServiceTests(unittest.TestCase):
             IsValid = function() return true end,
             GetOwner = function() return open_actor end,
             ItemSlots = { ForEach = function(_, fn)
-                for i = 0, 6 do if slots_test[i] then fn(i + 1, { get = function() return slots_test[i] end }) end end
+                for i = 0, 9 do if slots_test[i] then fn(i + 1, { get = function() return slots_test[i] end }) end end
             end },
         }
         local other_inv = {
@@ -2373,6 +2376,9 @@ class OrganiserServiceTests(unittest.TestCase):
         _G.__CACTUS_STEAK_CATS = table.concat(by_name["Cactus Steak"].categories, ",")
         _G.__CACTUS_FIBRES_CATS = table.concat(by_name["Cactus Fibres"].categories, ",")
         _G.__RUNE_ESSENCE_CATS = table.concat(by_name["Rune Essence"].categories, ",")
+        _G.__SALVE_CATS = table.concat(by_name["Salve Crystal"].categories, ",")
+        _G.__BRONZE_LEAF_CATS = table.concat(by_name["Bronze Leaf"].categories, ",")
+        _G.__TIN_ORE_CATS = table.concat(by_name["Tin Ore"].categories, ",")
         """)
         self.assertEqual(self.lua.eval("_G.__REACHABLE_COUNT"), 1)
         self.assertEqual(self.lua.eval("_G.__REACHABLE_ADDR"), 901)
@@ -2383,6 +2389,9 @@ class OrganiserServiceTests(unittest.TestCase):
         self.assertEqual(self.lua.eval("_G.__CACTUS_STEAK_CATS"), "Basic,Ingredient")
         self.assertEqual(self.lua.eval("_G.__CACTUS_FIBRES_CATS"), "Processed,Thread")
         self.assertEqual(self.lua.eval("_G.__RUNE_ESSENCE_CATS"), "Basic,Mineral")
+        self.assertEqual(self.lua.eval("_G.__SALVE_CATS"), "Quest")
+        self.assertEqual(self.lua.eval("_G.__BRONZE_LEAF_CATS"), "Component,Metal")
+        self.assertEqual(self.lua.eval("_G.__TIN_ORE_CATS"), "Basic,Ore")
 
 
 if __name__ == "__main__":

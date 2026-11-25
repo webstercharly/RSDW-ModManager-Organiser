@@ -64,6 +64,7 @@ local CATEGORY_NAMES = {
     ["ItemFilter.Type.Equipment.Weapon"] = "Weapon",
     ["ItemFilter.Type.Resource"] = "Resource",
     ["ItemFilter.Type.QuestItem"] = "Quest",
+    ["Item.QuestItem"] = "Quest",
 }
 
 local TAG_PREFIX_NAMES = {
@@ -508,7 +509,7 @@ local SKIP_CRAFT_INFERENCE = {
     cape = true, tool = true, ammo = true, potion = true,
     food = true, drink = true, tome = true, plan = true,
     pattern = true, vestige = true, whetstone = true, quest = true,
-    seed = true, ["raw fish"] = true, ["prime fish"] = true,
+    seed = true, metal = true, ["raw fish"] = true, ["prime fish"] = true,
 }
 
 local CRAFT_INFERENCE_RULES = {
@@ -622,6 +623,15 @@ local function infer_categories_from_identity(id, name, cats)
         end
     end
 
+    local has_ore = false
+    for _, existing in ipairs(cats) do
+        if existing:lower() == "ore" then has_ore = true; break end
+    end
+    if has_ore then
+        for i = #cats, 1, -1 do
+            if cats[i] == "Metal" then table.remove(cats, i) end
+        end
+    end
     for _, existing in ipairs(cats) do
         if SKIP_CRAFT_INFERENCE[existing:lower()] then
             return
