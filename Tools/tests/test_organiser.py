@@ -2088,6 +2088,55 @@ class OrganiserServiceTests(unittest.TestCase):
         self.assertEqual(self.lua.eval("_G.__SALVAGE_REC"), "All: Ore")
         self.assertEqual(self.lua.eval("_G.__DRAGON_LEATHER_REC"), "All: Component")
 
+    def test_catalog_resource_and_consumable_oddities_classify_cleanly(self):
+        self.lua.execute(r"""
+        local org = organiser_service
+        local function rec_for(id, name)
+            local item = {
+                IsValid = function() return true end,
+                Count = 2,
+                ItemData = {
+                    IsValid = function() return true end,
+                    GetFName = function() return { ToString = function() return id end } end,
+                    Name = { ToString = function() return name end },
+                    MaxStackSize = 99,
+                },
+            }
+            local inv = {
+                IsValid = function() return true end,
+                MaxSlotCount = 20,
+                ItemSlots = { ForEach = function(_, cb) cb(1, { get = function() return item end }) end },
+            }
+            return org.recommend_chest_label(inv, nil)
+        end
+        local cases = {
+            { "ITEM_Resources_Wood_Blightwood", "Blightwood", "All: Wood" },
+            { "ITEM_Resources_Skin_Dragon_Blue_Lesser", "Blue Dragonhide", "All: Component" },
+            { "ITEM_Resources_Scale_Dragon_Blue", "Blue Dragon Scale", "All: Component" },
+            { "ITEM_Resources_Opal", "Opal", "All: Component" },
+            { "ITEM_Resources_Red_Topaz", "Red Topaz", "All: Component" },
+            { "ITEM_Resources_Fibres_Mystic", "Mystic Fibres", "All: Component" },
+            { "ITEM_Resources_T7_Upgrade_Shard", "Ascension Shard 7", "All: Potion" },
+            { "ITEM_Resources_Tomato", "Tomato", "All: Food" },
+            { "ITEM_Resources_Fish_Raw_Lobster", "Raw Lobster", "All: Food" },
+            { "ITEM_Consumable_Fish_Lobster", "Roasted Lobster", "All: Food" },
+            { "ITEM_Consumable_Tea_Strong", "Strong Tea", "All: Food" },
+            { "ITEM_Consumable_Potion_Stamina", "Stamina Potion", "All: Potion" },
+            { "ITEM_Shortbow_Hunter", "Blightwood Shortbow", "All: Equipment" },
+            { "ITEM_Torch_Blue", "Blue Torch", "All: Equipment" },
+            { "ITEM_Resources_Visage_Dragon", "Noxious Draconic Visage", "All: Component" },
+        }
+        _G.__CATALOG_MISMATCHES = {}
+        for _, c in ipairs(cases) do
+            local got = rec_for(c[1], c[2])
+            if got ~= c[3] then
+                _G.__CATALOG_MISMATCHES[#_G.__CATALOG_MISMATCHES + 1] = c[2] .. "->" .. tostring(got) .. " (expected " .. c[3] .. ")"
+            end
+        end
+        """)
+        mismatches = list(self.lua.eval("_G.__CATALOG_MISMATCHES").values())
+        self.assertEqual(mismatches, [])
+
 
 if __name__ == "__main__":
     unittest.main()

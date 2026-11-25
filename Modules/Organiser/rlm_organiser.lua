@@ -513,21 +513,79 @@ local SKIP_CRAFT_INFERENCE = {
 
 local CRAFT_INFERENCE_RULES = {
     { "Ore", { "ore" } },
-    { "Metal", { "metal", "bar", "ingot", "spike", "rivet", "salvage" } },
-    { "Mineral", { "stone", "gypsum", "sandstone", "clay", "limestone", "granite", "obsidian", "coal", "charcoal", "flint", "salt", "sulphur", "sulfur", "lime" } },
-    { "Wood", { "log", "plank", "timber", "bark" } },
+    { "Metal", { "metal", "bar", "ingot", "spike", "rivet", "salvage", "shrapnel" } },
+    { "Mineral", { "stone", "gypsum", "sandstone", "clay", "limestone", "granite", "obsidian", "coal", "charcoal", "flint", "salt", "sulphur", "sulfur", "lime", "pellet" } },
+    { "Wood", { "wood", "blightwood", "log", "plank", "timber", "bark", "twig" } },
     { "Leather", { "leather" } },
-    { "Hide", { "pelt", "hide", "fur", "fleece" } },
-    { "Thread", { "thread", "yarn", "twine", "wool", "string", "cord" } },
+    { "Hide", { "pelt", "hide", "dragonhide", "fur", "fleece", "skin" } },
+    { "Thread", { "thread", "yarn", "twine", "wool", "string", "cord", "fibre", "fibres", "fiber", "fibers", "fibrous", "cactus" } },
     { "Cloth", { "cloth", "linen", "silk", "fabric" } },
-    { "Bone", { "bone", "bonemeal", "skull", "spine", "horn", "antler", "fang", "claw", "tusk", "talon", "feather", "chitin", "carapace" } },
-    { "Herb", { "herb", "flower", "leaf", "leaves", "moss", "root", "spore", "flax", "marigold", "harralander", "bitterweed", "vervain" } },
+    { "Bone", { "bone", "bonemeal", "skull", "spine", "horn", "antler", "fang", "claw", "tusk", "talon", "feather", "chitin", "carapace", "scale", "shell", "wing", "tooth" } },
+    { "Herb", { "herb", "flower", "leaf", "leaves", "moss", "root", "spore", "flax", "marigold", "harralander", "bitterweed", "vervain", "avantoe", "weed", "weeds" } },
     { "Seed", { "seed" } },
-    { "Gem", { "gem", "crystal", "amber", "quartz", "sapphire", "emerald", "ruby", "diamond" } },
-    { "Essence", { "essence", "anima", "ember", "ether", "core", "dust", "ash", "ashes" } },
-    { "Processed", { "oil", "sap", "resin", "wax", "slime", "tallow", "paste", "glue", "tar", "dye" } },
+    { "Gem", { "gem", "crystal", "amber", "quartz", "sapphire", "emerald", "ruby", "diamond", "jade", "opal", "topaz", "onyx", "dragonstone" } },
+    { "Essence", { "essence", "anima", "ember", "ether", "core", "dust", "ash", "ashes", "ectoplasm", "powder" } },
+    { "Processed", { "oil", "sap", "resin", "wax", "slime", "tallow", "paste", "glue", "tar", "dye", "adhesive", "naphtha", "glass", "ichor", "blood", "monoxide" } },
+    { "Special", { "visage", "artifact", "curiosities", "head", "heart" } },
+    { "Component", { "limbs", "limb", "handle", "mould", "mold" } },
     { "Currency", { "chit", "coin", "token", "currency", "doubloon" } },
-    { "Ingredient", { "flour", "sugar", "egg", "butter", "milk", "cream", "honey", "spice", "meat", "steak" } },
+    { "Ingredient", { "flour", "sugar", "egg", "butter", "milk", "cream", "honey", "spice", "meat", "steak", "cabbage", "mushroom", "onion", "potato", "pumpkin", "tomato", "watermelon", "wheat" } },
+}
+
+local ID_PREFIX_CATEGORIES = {
+    { "^item_quest_", "Quest" },
+    { "^item_activity_postbox_", "Quest" },
+    { "^item_journal_", "Quest" },
+    { "^da_consumable_plan_", "Plan" },
+    { "^da_consumable_pattern_", "Pattern" },
+    { "^da_consumable_vestige_", "Vestige" },
+    { "^item_consumable_planpack_", "Plan" },
+    { "^item_consumable_tome_", "Tome" },
+    { "^item_consumable_potion_", "Potion" },
+    { "^item_farming_.*potion", "Potion" },
+    { "^item_consumable_tea_", "Drink" },
+    { "^item_consumable_water_", "Drink" },
+    { "^item_consumable_whetstone", "Whetstone" },
+    { "^item_consumable_weaponbarbs", "Whetstone" },
+    { "^item_consumable_weaponpoison", "Whetstone" },
+    { "^item_consumable_wardstone", "Essence" },
+    { "^item_consumable_magicfocus", "Essence" },
+    { "^item_logging_axe_", "Tool" },
+    { "^item_pickaxe_", "Tool" },
+    { "^item_spade_", "Tool" },
+    { "^item_wateringcan_", "Tool" },
+    { "^item_fishingrod_", "Tool" },
+    { "^item_fishingnet_", "Tool" },
+    { "^item_secateurs_", "Tool" },
+    { "^item_torch", "Tool" },
+    { "^item_bucket_", "Tool" },
+    { "^item_armour_", "Armour" },
+    { "^item_armor_", "Armour" },
+    { "^item_shield_", "Shield" },
+    { "^item_masterworks_shield_", "Shield" },
+    { "^item_cape_", "Cape" },
+    { "^item_ammo_", "Ammo" },
+    { "^item_sword_", "Weapon" },
+    { "^item_scimitar_", "Weapon" },
+    { "^item_club_", "Weapon" },
+    { "^item_longbow_", "Weapon" },
+    { "^item_shortbow_", "Weapon" },
+    { "^item_crossbow_", "Weapon" },
+    { "^item_staff_", "Weapon" },
+    { "^item_masterwork_staff_", "Weapon" },
+    { "^item_dagger_", "Weapon" },
+    { "^item_greataxe_", "Weapon" },
+    { "^item_greatsword_", "Weapon" },
+    { "^item_hammer_", "Weapon" },
+    { "^item_mace_", "Weapon" },
+    { "^item_masterworks_greatsword_", "Weapon" },
+    { "^item_dr_main_reforged_greatsword", "Weapon" },
+    { "^item_throwable_", "Weapon" },
+    { "^item_scarabstaff", "Weapon" },
+    { "^item_resources_fish_raw_pristine_", "Prime Fish" },
+    { "^item_resources_fish_raw_", "Raw Fish" },
+    { "^item_fishbait_", "Basic" },
+    { "^item_fishingbait_", "Basic" },
 }
 
 local function infer_categories_from_identity(id, name, cats)
@@ -535,30 +593,32 @@ local function infer_categories_from_identity(id, name, cats)
     local n_l = tostring(name or ""):lower()
     local id_words = id_l:gsub("_", " ")
 
-    if id_l:find("^item_logging_axe_") or id_l:find("^item_pickaxe_") or id_l:find("^item_spade_")
-        or id_l:find("^item_wateringcan_") or id_l:find("^item_fishingrod_") or id_l:find("^item_fishingnet_") then
-        append_unique_cat(cats, "Tool")
-    elseif id_l:find("^item_trinket_") or id_l:find("^item_jewellery_") or id_l:find("_ring_") or id_l:find("_amulet_") then
-        if not id_l:find("quest", 1, true) then
-            append_unique_cat(cats, "Jewellery")
+    local matched_prefix = false
+    for _, entry in ipairs(ID_PREFIX_CATEGORIES) do
+        if id_l:find(entry[1]) then
+            append_unique_cat(cats, entry[2])
+            matched_prefix = true
+            break
         end
-    elseif id_l:find("^item_armour_") or id_l:find("^item_armor_") then
-        append_unique_cat(cats, "Armour")
-    elseif id_l:find("^item_shield_") or id_l:find("^item_masterworks_shield_") then
-        append_unique_cat(cats, "Shield")
-    elseif id_l:find("^item_cape_") then
-        append_unique_cat(cats, "Cape")
-    elseif id_l:find("^item_ammo_") then
-        append_unique_cat(cats, "Ammo")
-    elseif id_l:find("^item_sword_") or id_l:find("^item_scimitar_") or id_l:find("^item_club_")
-        or id_l:find("^item_longbow_") or id_l:find("^item_crossbow_") or id_l:find("^item_staff_")
-        or id_l:find("^item_masterwork_staff_") then
-        append_unique_cat(cats, "Weapon")
-    elseif #cats == 0 then
-        if n_l:find("ring", 1, true) or n_l:find("amulet", 1, true) or n_l:find("necklace", 1, true) then
+    end
+
+    if not matched_prefix then
+        if (id_l:find("^item_trinket_") or id_l:find("^item_jewellery_") or id_l:find("_ring_") or id_l:find("_amulet_"))
+            and not id_l:find("quest", 1, true) then
             append_unique_cat(cats, "Jewellery")
-        elseif n_l:find("hatchet", 1, true) or n_l:find("pickaxe", 1, true) then
-            append_unique_cat(cats, "Tool")
+        elseif id_l:find("_key_", 1, true) or id_l:find("quest", 1, true)
+            or id_l:find("_puzzle", 1, true) or id_l:find("sealbreakkey", 1, true) then
+            append_unique_cat(cats, "Quest")
+        elseif id_l:find("^item_consumable_") then
+            if #cats == 0 then
+                append_unique_cat(cats, id_l:find("pack", 1, true) and "Special" or "Food")
+            end
+        elseif #cats == 0 then
+            if n_l:find("ring", 1, true) or n_l:find("amulet", 1, true) or n_l:find("necklace", 1, true) then
+                append_unique_cat(cats, "Jewellery")
+            elseif n_l:find("hatchet", 1, true) or n_l:find("pickaxe", 1, true) then
+                append_unique_cat(cats, "Tool")
+            end
         end
     end
 
@@ -572,7 +632,8 @@ local function infer_categories_from_identity(id, name, cats)
         append_unique_cat(cats, "Rune")
         return
     end
-    if has_word_token(n_l, "shard") and has_word_token(n_l, "vault") then
+    if (has_word_token(n_l, "shard") and (has_word_token(n_l, "vault") or has_word_token(n_l, "ascension") or has_word_token(n_l, "upgrade")))
+        or id_l:find("upgrade_shard", 1, true) then
         append_unique_cat(cats, "Essence")
         return
     end
