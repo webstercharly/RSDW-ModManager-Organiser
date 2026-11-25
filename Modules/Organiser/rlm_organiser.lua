@@ -519,7 +519,7 @@ local CRAFT_INFERENCE_RULES = {
     { "Wood", { "wood", "blightwood", "log", "plank", "timber", "bark", "twig" } },
     { "Leather", { "leather" } },
     { "Hide", { "pelt", "hide", "dragonhide", "fur", "fleece", "skin" } },
-    { "Thread", { "thread", "yarn", "twine", "wool", "string", "cord", "fibre", "fibres", "fiber", "fibers", "fibrous", "cactus" } },
+    { "Thread", { "thread", "yarn", "twine", "wool", "string", "cord", "fibre", "fibres", "fiber", "fibers", "fibrous" } },
     { "Cloth", { "cloth", "linen", "silk", "fabric" } },
     { "Bone", { "bone", "bonemeal", "skull", "spine", "horn", "antler", "fang", "claw", "tusk", "talon", "feather", "chitin", "carapace", "scale", "shell", "wing", "tooth" } },
     { "Herb", { "herb", "flower", "leaf", "leaves", "moss", "root", "spore", "flax", "marigold", "harralander", "bitterweed", "vervain", "avantoe", "weed", "weeds" } },
@@ -2114,7 +2114,7 @@ local MATERIAL_FAMILY_PATTERNS = {
     { 38.40, { "pelt", "hide", "dragonhide", "fur", "fleece", "skin" } },
     { 38.60, { "leather" } },
     -- Textiles
-    { 39.10, { "thread", "yarn", "twine", "string", "cord", "wool", "fibre", "fibres", "fibrous", "cactus" } },
+    { 39.10, { "thread", "yarn", "twine", "string", "cord", "wool", "fibre", "fibres", "fibrous" } },
     { 39.20, { "cloth", "linen", "silk", "fabric", "weave" } },
     { 39.80, { "chit", "coin", "token", "currency", "doubloon" } },
     -- Botanical

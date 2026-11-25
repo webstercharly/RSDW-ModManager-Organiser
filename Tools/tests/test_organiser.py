@@ -2304,6 +2304,8 @@ class OrganiserServiceTests(unittest.TestCase):
             [1] = make_item("ITEM_Resources_Clay", "Clay", { "ItemFilter.Material.BasicMaterial", "ItemFilter.Material.Mineral", "ItemFilter.Material.Ore" }),
             [2] = make_item("ITEM_Resources_Seeds_Cactus_Barrel", "Barrel Cactus Seeds", { "ItemFilter.Type.Seed" }),
             [3] = make_item("ITEM_Resources_Seeds_Weed", "Desert Weed Seeds", { "ItemFilter.Type.Seed" }),
+            [4] = make_item("ITEM_Resources_Steak_Cactus", "Cactus Steak", { "ItemFilter.Material.BasicMaterial" }),
+            [5] = make_item("ITEM_Resources_Fibers_Cactus", "Cactus Fibres", { "ItemFilter.Material.ProcessedMaterial" }),
         }
         local open_actor = {
             GetAddress = function() return 901 end,
@@ -2328,7 +2330,7 @@ class OrganiserServiceTests(unittest.TestCase):
             IsValid = function() return true end,
             GetOwner = function() return open_actor end,
             ItemSlots = { ForEach = function(_, fn)
-                for i = 0, 3 do if slots_test[i] then fn(i + 1, { get = function() return slots_test[i] end }) end end
+                for i = 0, 5 do if slots_test[i] then fn(i + 1, { get = function() return slots_test[i] end }) end end
             end },
         }
         local other_inv = {
@@ -2367,6 +2369,8 @@ class OrganiserServiceTests(unittest.TestCase):
         _G.__CLAY_CATS = table.concat(by_name["Clay"].categories, ",")
         _G.__CACTUS_SEED_CATS = table.concat(by_name["Barrel Cactus Seeds"].categories, ",")
         _G.__WEED_SEED_CATS = table.concat(by_name["Desert Weed Seeds"].categories, ",")
+        _G.__CACTUS_STEAK_CATS = table.concat(by_name["Cactus Steak"].categories, ",")
+        _G.__CACTUS_FIBRES_CATS = table.concat(by_name["Cactus Fibres"].categories, ",")
         """)
         self.assertEqual(self.lua.eval("_G.__REACHABLE_COUNT"), 1)
         self.assertEqual(self.lua.eval("_G.__REACHABLE_ADDR"), 901)
@@ -2374,6 +2378,8 @@ class OrganiserServiceTests(unittest.TestCase):
         self.assertEqual(self.lua.eval("_G.__CLAY_CATS"), "Basic,Mineral")
         self.assertEqual(self.lua.eval("_G.__CACTUS_SEED_CATS"), "Seed")
         self.assertEqual(self.lua.eval("_G.__WEED_SEED_CATS"), "Seed")
+        self.assertEqual(self.lua.eval("_G.__CACTUS_STEAK_CATS"), "Basic,Ingredient")
+        self.assertEqual(self.lua.eval("_G.__CACTUS_FIBRES_CATS"), "Processed,Thread")
 
 
 if __name__ == "__main__":
