@@ -628,6 +628,10 @@ local function infer_categories_from_identity(id, name, cats)
         end
     end
 
+    if id_l == "item_rune_essence" or (has_word_token(n_l, "rune") and has_word_token(n_l, "essence")) then
+        append_unique_cat(cats, "Mineral")
+        return
+    end
     if id_l:find("^item_rune_") or (has_word_token(n_l, "rune") and not has_word_token(n_l, "stone")) then
         append_unique_cat(cats, "Rune")
         return
