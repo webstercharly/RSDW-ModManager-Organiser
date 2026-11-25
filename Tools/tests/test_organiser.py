@@ -2057,6 +2057,37 @@ class OrganiserServiceTests(unittest.TestCase):
         self.assertTrue(self.lua.eval("_G.__SWORD_IN_C2"))
         self.assertTrue(self.lua.eval("_G.__ORE_STAYS_IN_C1"))
 
+    def test_demonic_oil_and_salvage_inference_rules(self):
+        self.lua.execute(r"""
+        local org = organiser_service
+        local function rec_for(id, name)
+            local item = {
+                IsValid = function() return true end,
+                Count = 5,
+                ItemData = {
+                    IsValid = function() return true end,
+                    GetFName = function() return { ToString = function() return id end } end,
+                    Name = { ToString = function() return name end },
+                    MaxStackSize = 99,
+                },
+            }
+            local inv = {
+                IsValid = function() return true end,
+                MaxSlotCount = 20,
+                ItemSlots = { ForEach = function(_, cb) cb(1, { get = function() return item end }) end },
+            }
+            return org.recommend_chest_label(inv, nil)
+        end
+        _G.__OIL_REC = rec_for("ITEM_Resources_DemonicOil", "Demonic Oil")
+        _G.__SCRAP_METAL_REC = rec_for("ITEM_Resources_BlackMetal_Scraps", "Black Metal Scraps")
+        _G.__SALVAGE_REC = rec_for("ITEM_Resources_Salvage_Mithril", "Mithril Salvage Pile")
+        _G.__DRAGON_LEATHER_REC = rec_for("ITEM_Resources_Leather_Dragon_Blue_Lesser", "Draconic Leather Scraps")
+        """)
+        self.assertEqual(self.lua.eval("_G.__OIL_REC"), "All: Component")
+        self.assertEqual(self.lua.eval("_G.__SCRAP_METAL_REC"), "All: Ore")
+        self.assertEqual(self.lua.eval("_G.__SALVAGE_REC"), "All: Ore")
+        self.assertEqual(self.lua.eval("_G.__DRAGON_LEATHER_REC"), "All: Component")
+
 
 if __name__ == "__main__":
     unittest.main()

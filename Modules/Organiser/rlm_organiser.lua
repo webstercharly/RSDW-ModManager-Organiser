@@ -513,18 +513,19 @@ local SKIP_CRAFT_INFERENCE = {
 
 local CRAFT_INFERENCE_RULES = {
     { "Ore", { "ore" } },
-    { "Metal", { "bar", "ingot", "spike", "rivet" } },
+    { "Metal", { "metal", "bar", "ingot", "spike", "rivet", "salvage" } },
     { "Mineral", { "stone", "gypsum", "sandstone", "clay", "limestone", "granite", "obsidian", "coal", "charcoal", "flint", "salt", "sulphur", "sulfur", "lime" } },
     { "Wood", { "log", "plank", "timber", "bark" } },
     { "Leather", { "leather" } },
     { "Hide", { "pelt", "hide", "fur", "fleece" } },
     { "Thread", { "thread", "yarn", "twine", "wool", "string", "cord" } },
     { "Cloth", { "cloth", "linen", "silk", "fabric" } },
-    { "Bone", { "bone", "skull", "spine", "horn", "antler", "fang", "claw", "tusk", "talon", "feather", "chitin", "carapace" } },
+    { "Bone", { "bone", "bonemeal", "skull", "spine", "horn", "antler", "fang", "claw", "tusk", "talon", "feather", "chitin", "carapace" } },
     { "Herb", { "herb", "flower", "leaf", "leaves", "moss", "root", "spore", "flax", "marigold", "harralander", "bitterweed", "vervain" } },
     { "Seed", { "seed" } },
     { "Gem", { "gem", "crystal", "amber", "quartz", "sapphire", "emerald", "ruby", "diamond" } },
     { "Essence", { "essence", "anima", "ember", "ether", "core", "dust", "ash", "ashes" } },
+    { "Processed", { "oil", "sap", "resin", "wax", "slime", "tallow", "paste", "glue", "tar", "dye" } },
     { "Currency", { "chit", "coin", "token", "currency", "doubloon" } },
     { "Ingredient", { "flour", "sugar", "egg", "butter", "milk", "cream", "honey", "spice", "meat", "steak" } },
 }
