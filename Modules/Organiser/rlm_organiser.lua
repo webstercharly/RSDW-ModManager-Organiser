@@ -842,10 +842,11 @@ local function ufunction_param_count(path)
 end
 
 local function sender_unique_id(controller)
-    local uid = safe_call(function()
-        local ps = controller and controller.PlayerState
-        return ps and ps.UniqueId or nil
-    end)
+    local ps = controller and safe_call(function() return controller.PlayerState end)
+    if not ps then return {} end
+    local uid = safe_call(function() return ps.UniqueID end)
+    if uid ~= nil then return uid end
+    uid = safe_call(function() return ps.UniqueId end)
     return uid ~= nil and uid or {}
 end
 

@@ -1903,11 +1903,11 @@ class OrganiserServiceTests(unittest.TestCase):
         end
         local pc = {
             IsValid = function() return true end,
-            PlayerState = { UniqueId = sentinel_uid },
+            PlayerState = { UniqueID = sentinel_uid },
             Server_SetObjectCustomName = function(self, target, new_name, setter_id)
                 assert(target ~= nil, "missing target")
                 assert(new_name ~= nil, "missing new_name")
-                assert(setter_id == sentinel_uid, "expected PlayerState.UniqueId as 3rd param")
+                assert(setter_id == sentinel_uid, "expected PlayerState.UniqueID as 3rd param")
                 captured[#captured + 1] = { target = target:GetFullName(), name = tostring(new_name), uid = setter_id }
             end,
         }
