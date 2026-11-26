@@ -4,9 +4,10 @@
 
 local engine = require("rlm_engine")
 local log = require("rlm_log")
+local has_glass, glass = pcall(require, "rlm_glass")
 local organiser = ...
 
-local M = { VERSION = "0.1.0" }
+local M = { VERSION = "0.1.1" }
 
 local PANEL_PKG = "/Game/UI/Panels/WBP_Panel"
 local TEXT_PKG = "/Game/UI/Common/WBP_DomTextBlock"
@@ -397,7 +398,9 @@ end
 local function build_content(ui)
     local col = construct(ui.tree, "VerticalBox")
     if not valid(col) then return false end
-    if not pcall(function() ui.frame.PanelContent:AddChild(col) end) then return false end
+    if has_glass then
+        if not glass.mount_panel(ui.frame, col, valid) then return false end
+    elseif not pcall(function() ui.frame.PanelContent:AddChild(col) end) then return false end
     ui.col = col
 
     ui.title = add_text(ui, col, "v", "CHEST ORGANISER", 20, GOLD)

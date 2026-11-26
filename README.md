@@ -21,6 +21,11 @@ World and dungeon loot chests open in the game's usual loot panel. On joined ser
 
 Settings, external labels and retention rules are stored in `%LOCALAPPDATA%\RSDWModManager\organiser.json`. Removing the module leaves that file and any native chest names in place.
 
+## Version 0.3.5
+
+The chest sidebar uses the shared Graphite backing when installed with the
+current public Mod Manager.
+
 ## Version 0.3.4
 
 Improves docked chest detection (`open_storage()` prioritises active panels and cleanly validates open storage, while the HUD backs up `LoopInGameThreadWithDelay` with an `rlm_async` pump, re-checks active station visibility, removes stale dock frames on host switch, and logs state transitions), refines crafting material inference and broad-category scoring, prunes non-storage display props (racks, pedestals, trophies, stations), and improves demand-first base role planning. Forty Lua-backed unit tests pass cleanly. The [in-game checklist](Docs/TEST_PLAN.md) remains open for standalone public verification.

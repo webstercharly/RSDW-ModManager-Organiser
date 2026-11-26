@@ -124,7 +124,7 @@ class OrganiserManifestTests(unittest.TestCase):
         self.assertIn("label", action_ids)
         self.assertIn("lock", action_ids)
         self.assertIn("trash", action_ids)
-        self.assertEqual(manifest["version"], "0.3.4")
+        self.assertEqual(manifest["version"], "0.3.5")
 
 @unittest.skipIf(LuaRuntime is None, "lupa is not installed")
 class OrganiserServiceTests(unittest.TestCase):

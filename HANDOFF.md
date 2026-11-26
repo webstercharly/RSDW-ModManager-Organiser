@@ -1,5 +1,11 @@
 # Handoff
 
+## Organiser 0.3.5
+
+- The chest sidebar uses the public shell's shared Graphite surface when
+  available. The public module retains its own storage configuration and
+  chest lifecycle. Live appearance in the public package is pending.
+
 ## Organiser 0.3.4: Docked chest open reliability & smarter bank sorting
 
 Organiser 0.3.4 ports the verified docked-HUD and category-planning fixes into the public module (`Modules/Organiser/`), keeping `organiser.json` persistence and public boundary exclusions (no private shortcut bindings, full-menu shortcut button, or deposit Magic XP bonus; trash incineration off by default).
