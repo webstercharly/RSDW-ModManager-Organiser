@@ -4,10 +4,12 @@
 
 local engine = require("rlm_engine")
 local log = require("rlm_log")
-local has_glass, glass = pcall(require, "rlm_glass")
-local organiser = ...
+local organiser = require("rlm_organiser")
+local glass = require("rlm_glass")
+local themes = require("rlm_ui_theme")
+local ui_kit = require("rlm_ui_kit")
 
-local M = { VERSION = "0.1.1" }
+local M = { VERSION = "0.1.0" }
 
 local PANEL_PKG = "/Game/UI/Panels/WBP_Panel"
 local TEXT_PKG = "/Game/UI/Common/WBP_DomTextBlock"
@@ -15,25 +17,13 @@ local BUTTON_PKG = "/Game/UI/Common/WBP_DomAllCapsButton"
 local HOST_CLASSES = { "WBP_WorldActorInventory_MainPanel_C", "WBP_Inventory_MainPanel_C" }
 local STATION_CLASS = "WBP_ProcessingStation_MainPanel_C"
 
-local DEFAULT_X = 1380
-local DEFAULT_Y = 57
-local PANEL_WIDTH = 430
-local PANEL_HEIGHT = 650
-local CONTENT_WIDTH = PANEL_WIDTH - 52
-local ROLE_PRESETS = {
-    { text = "ALL: ORE", label = "All: Ore" },
-    { text = "ALL: WOOD", label = "All: Wood" },
-    { text = "ALL: EQUIPMENT", label = "All: Equipment" },
-    { text = "ALL: FOOD", label = "All: Food" },
-    { text = "ALL: POTION", label = "All: Potion" },
-    { text = "ALL: COMPONENT", label = "All: Component" },
-    { text = "MISC (MIXED)", label = "Misc" },
-    { text = "CLEAR LABEL", label = "CLEAR" },
-}
+local DEFAULT_X = 1410
+local DEFAULT_Y = 235
+local PANEL_WIDTH = 456
+local PANEL_HEIGHT = 540
+local CONTENT_WIDTH = PANEL_WIDTH - 80
 
-local GOLD = { R = 0.91, G = 0.77, B = 0.48, A = 1.0 }
-local CREAM = { R = 0.92, G = 0.89, B = 0.82, A = 1.0 }
-local MUTED = { R = 0.66, G = 0.64, B = 0.58, A = 1.0 }
+local GOLD, CREAM, MUTED
 local ACCENT = { R = 0.35, G = 0.80, B = 0.50, A = 1.0 }
 
 local state = {
@@ -45,10 +35,11 @@ local state = {
     station = nil,
     next_host_scan = 0,
     pending_click = nil,
+    pending_open_menu = false,
     session_key = nil,
-    status_message = "Ready.",
+    action_status = nil,
+    sug_labels = {},
     action_map = {},
-    label_values = {},
     config = nil,
 }
 
@@ -228,7 +219,24 @@ local function add_text(ui, parent, kind, initial, size, color)
     return tb, slot
 end
 
-local function add_button(ui, parent, kind, label, action_id, width, height)
+local function add_divider(ui, col, top_pad, bottom_pad)
+    local box = construct(ui.tree, "SizeBox")
+    if not valid(box) then return end
+    local slot = safe_call(function() return col:AddChildToVerticalBox(box) end)
+    local line = construct(ui.tree, "Border")
+    if valid(line) then safe_call(function() box:AddChild(line) end) end
+    later(ui, function()
+        pcall(function() box:SetHeightOverride(1) end)
+        if valid(slot) then
+            pcall(function() slot:SetPadding({ Left = 0, Top = top_pad or 6, Right = 0, Bottom = bottom_pad or 8 }) end)
+        end
+        if valid(line) then
+            pcall(function() line:SetBrushColor({ R = 0.79, G = 0.85, B = 0.94, A = 0.14 }) end)
+        end
+    end)
+end
+
+local function add_button(ui, parent, kind, label, action_id, width, height, scheme)
     local holder = construct(ui.tree, "SizeBox")
     if not valid(holder) then return nil end
     local pslot = kind == "v"
@@ -239,11 +247,17 @@ local function add_button(ui, parent, kind, label, action_id, width, height)
     if not valid(overlay) then return nil end
     safe_call(function() holder:AddChild(overlay) end)
 
+    local surface_bg = construct(ui.tree, "Border")
+    local sslot = valid(surface_bg) and safe_call(function() return overlay:AddChildToOverlay(surface_bg) end) or nil
+
     local btn = safe_call(function() return ui.wbl:Create(ui.pc, ui.btn_cls, ui.pc) end)
     if not valid(btn) then return nil end
     local bslot = safe_call(function() return overlay:AddChildToOverlay(btn) end)
 
-    local txt = safe_call(function() return StaticConstructObject(ui.text_cls, ui.tree) end)
+    local txt = construct(ui.tree, "TextBlock")
+    if not valid(txt) then
+        txt = safe_call(function() return StaticConstructObject(ui.text_cls, ui.tree) end)
+    end
     local tslot = valid(txt) and safe_call(function() return overlay:AddChildToOverlay(txt) end) or nil
 
     local bname = full_name(btn)
@@ -251,14 +265,23 @@ local function add_button(ui, parent, kind, label, action_id, width, height)
         state.action_map[bname] = action_id
     end
 
+    local text_color = (scheme == "primary") and GOLD or CREAM
     local like = find_button_style()
     later(ui, function()
         if width then pcall(function() holder:SetWidthOverride(width) end) end
         if height then pcall(function() holder:SetHeightOverride(height) end) end
         pcall(function() overlay:SetVisibility(4) end)
+        if valid(surface_bg) then
+            if valid(sslot) then
+                pcall(function() sslot:SetHorizontalAlignment(0); sslot:SetVerticalAlignment(0) end)
+            end
+            pcall(function() surface_bg:SetVisibility(3) end)
+            glass.apply(surface_bg, scheme or "inset", themes.active(), 8)
+        end
         if valid(like) then
             pcall(function() btn:SetStyle(like.Style) end)
         end
+        pcall(function() btn:SetVisibility(0) end)
         pcall(function() btn:SetIsSelectable(false) end)
         pcall(function() btn:SetShouldSelectUponReceivingFocus(false) end)
         pcall(function() btn:SetIsFocusable(false) end)
@@ -267,24 +290,21 @@ local function add_button(ui, parent, kind, label, action_id, width, height)
             pcall(function() bslot:SetHorizontalAlignment(0); bslot:SetVerticalAlignment(0) end)
         end
         if valid(txt) then
-            pcall(function() local f = txt.Font; f.Size = 13; txt:SetFont(f) end)
-            pcall(function() txt:SetColorAndOpacity({ SpecifiedColor = CREAM, ColorUseRule = 0 }) end)
+            pcall(function() local f = txt.Font; f.Size = 12; txt:SetFont(f) end)
+            pcall(function() txt:SetColorAndOpacity({ SpecifiedColor = text_color, ColorUseRule = 0 }) end)
             pcall(function() txt:SetText(FText(label or "")) end)
-            pcall(function() txt:SetAutoWrapText(false) end)
-            pcall(function() txt:SetVisibility(3) end)
-            pcall(function() txt:SetShadowOffset({ X = 1, Y = 1 }) end)
-            pcall(function() txt:SetShadowColorAndOpacity({ R = 0, G = 0, B = 0, A = 0.9 }) end)
+            ui_kit.style_button_label(txt)
         end
         if valid(tslot) then
             pcall(function()
                 tslot:SetHorizontalAlignment(2)
                 tslot:SetVerticalAlignment(2)
-                tslot:SetPadding({ Left = 6, Top = 0, Right = 6, Bottom = 0 })
+                tslot:SetPadding({ Left = 8, Top = 0, Right = 8, Bottom = 0 })
             end)
         end
     end)
 
-    return { holder = holder, slot = pslot, btn = btn, label = txt }
+    return { holder = holder, slot = pslot, btn = btn, label = txt, bg = surface_bg, base_scheme = scheme or "inset" }
 end
 
 local function panel_coords()
@@ -307,10 +327,6 @@ local function build_frame(pc, host)
     if not valid(frame) then return nil, "could not construct WBP_Panel" end
 
     hide_embers(frame)
-    pcall(function()
-        local bg = frame.BackgroundPanel
-        if valid(bg) then bg:SetRenderOpacity(0.86) end
-    end)
 
     local tree = safe_call(function() return frame.WidgetTree end)
     if not valid(tree) then return nil, "frame widget tree unavailable" end
@@ -356,7 +372,7 @@ local function build_frame(pc, host)
         text_cls = text_cls,
         btn_cls = btn_cls,
         queue = {},
-        label_btns = {},
+        sug_btns = {},
         last_h = PANEL_HEIGHT,
     }
 end
@@ -378,8 +394,9 @@ local function fit_panel_height(ui)
     local max_h = math.max(360, math.floor(viewport_h - y - 24))
     local measured_h = nil
     pcall(function()
-        ui.col:ForceLayoutPrepass()
-        local ds = ui.col:GetDesiredSize()
+        local target = valid(ui.wrap) and ui.wrap or ui.col
+        target:ForceLayoutPrepass()
+        local ds = target:GetDesiredSize()
         if ds and type(ds.Y) == "number" and ds.Y > 40 and ds.Y < 4000 then
             measured_h = math.ceil(ds.Y) + 70
         end
@@ -396,72 +413,127 @@ local function fit_panel_height(ui)
 end
 
 local function build_content(ui)
+    local colors = themes.active().colors
+    GOLD, CREAM, MUTED = colors.gold, colors.cream, colors.muted
+
+    local wrap = construct(ui.tree, "Border")
     local col = construct(ui.tree, "VerticalBox")
-    if not valid(col) then return false end
-    if has_glass then
-        if not glass.mount_panel(ui.frame, col, valid) then return false end
-    elseif not pcall(function() ui.frame.PanelContent:AddChild(col) end) then return false end
+    if not valid(wrap) or not valid(col) then return false end
+    safe_call(function() wrap:AddChild(col) end)
+    if not glass.mount_panel(ui.frame, wrap, valid) then return false end
+    ui.wrap = wrap
     ui.col = col
+    later(ui, function()
+        pcall(function() wrap:SetBrushColor({ R = 0, G = 0, B = 0, A = 0 }) end)
+        pcall(function() wrap:SetPadding({ Left = 14, Top = 10, Right = 14, Bottom = 14 }) end)
+    end)
 
     ui.title = add_text(ui, col, "v", "CHEST ORGANISER", 20, GOLD)
-    local _, cap_slot = add_text(ui, col, "v", "", 13, CREAM)
-    ui.caption = _
+    local cap_tb, cap_slot = add_text(ui, col, "v", "", 13, CREAM)
+    ui.caption = cap_tb
     later(ui, function()
-        if valid(cap_slot) then pcall(function() cap_slot:SetPadding({ Left = 0, Top = 2, Right = 0, Bottom = 8 }) end) end
+        if valid(cap_slot) then pcall(function() cap_slot:SetPadding({ Left = 0, Top = 4, Right = 0, Bottom = 2 }) end) end
         if valid(ui.caption) then pcall(function() ui.caption:SetAutoWrapText(true); ui.caption:SetWrapTextAt(CONTENT_WIDTH) end) end
     end)
 
-    local half_w = math.floor((CONTENT_WIDTH - 8) / 2)
-    local function two_row(l1, a1, l2, a2, bottom_pad)
+    add_divider(ui, col, 8, 8)
+
+    local tabs_hdr, tabs_hdr_slot = add_text(ui, col, "v", "NEARBY CHESTS", 11, GOLD)
+    ui.tabs_header = tabs_hdr
+    ui.tab_btns = {}
+    local tab_row = construct(ui.tree, "HorizontalBox")
+    local tab_row_slot = valid(tab_row) and safe_call(function() return col:AddChildToVerticalBox(tab_row) end) or nil
+    if valid(tab_row) then
+        local gap = 8
+        local prev_btn = add_button(ui, tab_row, "h", "<", "tab:prev", 40, 34, "inset")
+        local tab1 = add_button(ui, tab_row, "h", "CHEST 1", "tab:slot:1", 136, 34, "inset")
+        local tab2 = add_button(ui, tab_row, "h", "CHEST 2", "tab:slot:2", 136, 34, "inset")
+        local next_btn = add_button(ui, tab_row, "h", ">", "tab:next", 40, 34, "inset")
+        ui.tab_prev = prev_btn
+        ui.tab_next = next_btn
+        ui.tab_btns = { tab1, tab2 }
+        later(ui, function()
+            if valid(tabs_hdr_slot) then pcall(function() tabs_hdr_slot:SetPadding({ Left = 0, Top = 0, Right = 0, Bottom = 4 }) end) end
+            if valid(tab_row_slot) then pcall(function() tab_row_slot:SetPadding({ Left = 0, Top = 0, Right = 0, Bottom = 4 }) end) end
+            if prev_btn and valid(prev_btn.slot) then pcall(function() prev_btn.slot:SetPadding({ Left = 0, Top = 0, Right = gap, Bottom = 0 }) end) end
+            if tab1 and valid(tab1.slot) then pcall(function() tab1.slot:SetPadding({ Left = 0, Top = 0, Right = gap, Bottom = 0 }) end) end
+            if tab2 and valid(tab2.slot) then pcall(function() tab2.slot:SetPadding({ Left = 0, Top = 0, Right = gap, Bottom = 0 }) end) end
+        end)
+    end
+
+    add_divider(ui, col, 8, 8)
+
+    local col_gap = 10
+    local half_w = math.floor((CONTENT_WIDTH - col_gap) / 2)
+    local function two_row(l1, a1, l2, a2, bottom_pad, s1, s2, h)
         local row = construct(ui.tree, "HorizontalBox")
         if not valid(row) then return end
         local rslot = safe_call(function() return col:AddChildToVerticalBox(row) end)
-        local b1 = add_button(ui, row, "h", l1, a1, half_w, 38)
-        local b2 = add_button(ui, row, "h", l2, a2, half_w, 38)
+        local row_h = h or 38
+        local b1 = add_button(ui, row, "h", l1, a1, half_w, row_h, s1)
+        local b2 = add_button(ui, row, "h", l2, a2, half_w, row_h, s2)
         later(ui, function()
-            if valid(rslot) then pcall(function() rslot:SetPadding({ Left = 0, Top = 0, Right = 0, Bottom = bottom_pad or 6 }) end) end
-            if b1 and valid(b1.slot) then pcall(function() b1.slot:SetPadding({ Left = 0, Top = 0, Right = 8, Bottom = 0 }) end) end
+            if valid(rslot) then pcall(function() rslot:SetPadding({ Left = 0, Top = 0, Right = 0, Bottom = bottom_pad or 8 }) end) end
+            if b1 and valid(b1.slot) then pcall(function() b1.slot:SetPadding({ Left = 0, Top = 0, Right = col_gap, Bottom = 0 }) end) end
         end)
         return b1, b2
     end
 
-    two_row("DEPOSIT BACKPACK", "deposit", "SORT THIS CHEST", "sort", 6)
-    two_row("RESORT NEARBY", "resort", "ORGANISE BASE", "auto_organise", 6)
-    local fill_btn, trash_btn = two_row("FILL NEW ONLY", "fill_unlabelled", "TOGGLE TRASH", "toggle_trash", 6)
+    two_row("DEPOSIT ITEMS", "deposit", "SORT CHEST", "sort", 8, "inset", "inset")
+    two_row("RESORT NEARBY", "resort", "ORGANISE BASE", "auto_organise", 8, "inset", "primary")
+    local fill_btn, full_btn = two_row("FILL NEW ONLY", "fill_unlabelled", "FULL MENU", "open_full", 8, "inset", "inset")
     ui.replan_btn = fill_btn
-    ui.trash_btn = trash_btn
-    local lbl_hdr, lbl_hdr_slot = add_text(ui, col, "v", "SET CHEST BANK ROLE", 12, GOLD)
-    ui.label_header = lbl_hdr
+    ui.full_btn = full_btn
+    local osrs_btn = add_button(ui, col, "v", "OSRS BANK VIEW", "switch_osrs", CONTENT_WIDTH, 34, "primary")
     later(ui, function()
-        if valid(lbl_hdr_slot) then pcall(function() lbl_hdr_slot:SetPadding({ Left = 0, Top = 2, Right = 0, Bottom = 5 }) end) end
+        if osrs_btn and valid(osrs_btn.slot) then pcall(function() osrs_btn.slot:SetPadding({ Left = 0, Top = 0, Right = 0, Bottom = 2 }) end) end
     end)
 
-    ui.rec_btn = add_button(ui, col, "v", "RECOMMENDED ROLE", "role_rec", CONTENT_WIDTH, 34)
-    if ui.rec_btn then
-        later(ui, function()
-            if valid(ui.rec_btn.slot) then pcall(function() ui.rec_btn.slot:SetPadding({ Left = 0, Top = 0, Right = 0, Bottom = 6 }) end) end
-        end)
-    end
+    add_divider(ui, col, 10, 10)
 
-    for idx = 1, #ROLE_PRESETS, 2 do
-        local p1, p2 = ROLE_PRESETS[idx], ROLE_PRESETS[idx + 1]
-        local b1, b2 = two_row(p1.text, "role:" .. tostring(idx),
-            p2 and p2.text or "", p2 and ("role:" .. tostring(idx + 1)) or "", 5)
-        if b1 then
-            pcall(function() b1.holder:SetHeightOverride(32) end)
-            ui.label_btns[idx] = b1
-        end
-        if b2 then
-            pcall(function() b2.holder:SetHeightOverride(32) end)
-            ui.label_btns[idx + 1] = b2
-        end
-    end
-
-    local status_tb, status_slot = add_text(ui, col, "v", "Ready.", 13, MUTED)
-    ui.status = status_tb
+    local lbl_hdr, lbl_hdr_slot = add_text(ui, col, "v", "SUGGESTED CHEST NAMES", 11, GOLD)
+    ui.label_header = lbl_hdr
+    local sug_hint, sug_hint_slot = add_text(ui, col, "v", "", 11, MUTED)
+    ui.sug_hint = sug_hint
     later(ui, function()
-        if valid(status_slot) then pcall(function() status_slot:SetPadding({ Left = 0, Top = 8, Right = 0, Bottom = 0 }) end) end
-        if valid(ui.status) then pcall(function() ui.status:SetAutoWrapText(true); ui.status:SetWrapTextAt(CONTENT_WIDTH) end) end
+        if valid(lbl_hdr_slot) then pcall(function() lbl_hdr_slot:SetPadding({ Left = 0, Top = 0, Right = 0, Bottom = 3 }) end) end
+        if valid(sug_hint_slot) then pcall(function() sug_hint_slot:SetPadding({ Left = 0, Top = 0, Right = 0, Bottom = 8 }) end) end
+        if valid(ui.sug_hint) then pcall(function() ui.sug_hint:SetAutoWrapText(true); ui.sug_hint:SetWrapTextAt(CONTENT_WIDTH) end) end
+    end)
+
+    local s1_btn, s2_btn = two_row("SUGGESTION 1", "sug:1", "SUGGESTION 2", "sug:2", 2, "inset", "inset", 40)
+    ui.sug_btns[1] = s1_btn
+    ui.sug_btns[2] = s2_btn
+
+    add_divider(ui, col, 10, 10)
+
+    local status_card = construct(ui.tree, "Border")
+    local sc_slot = valid(status_card) and safe_call(function() return col:AddChildToVerticalBox(status_card) end) or nil
+    local status_box = construct(ui.tree, "VerticalBox")
+    if valid(status_card) and valid(status_box) then
+        safe_call(function() status_card:AddChild(status_box) end)
+    end
+    local st_hdr = valid(status_box) and add_text(ui, status_box, "v", "STATUS", 10, MUTED) or nil
+    local st_body, st_body_slot = nil, nil
+    if valid(status_box) then
+        st_body, st_body_slot = add_text(ui, status_box, "v", "", 12, CREAM)
+    end
+    ui.status_card = status_card
+    ui.status_title = st_hdr
+    ui.status = st_body
+    later(ui, function()
+        if valid(status_card) then
+            glass.apply(status_card, "stats", themes.active(), 10)
+            pcall(function() status_card:SetPadding({ Left = 12, Top = 9, Right = 12, Bottom = 9 }) end)
+        end
+        if valid(sc_slot) then pcall(function() sc_slot:SetPadding({ Left = 0, Top = 0, Right = 0, Bottom = 0 }) end) end
+        if valid(st_body_slot) then pcall(function() st_body_slot:SetPadding({ Left = 0, Top = 3, Right = 0, Bottom = 0 }) end) end
+        if valid(ui.status) then
+            pcall(function()
+                ui.status:SetAutoWrapText(true)
+                ui.status:SetWrapTextAt(CONTENT_WIDTH - 24)
+            end)
+        end
     end)
 
     return true
@@ -474,119 +546,273 @@ local function flush_later(ui)
     ui.queue = {}
 end
 
+local function format_chest_caption(actor_name, current_label, slot_count, max_slots)
+    local has_name = type(actor_name) == "string" and actor_name ~= "" and actor_name ~= "Storage Container"
+    if current_label and current_label ~= "" then
+        if not has_name or actor_name:lower() == current_label:lower() then
+            return string.format("Role: [%s]  •  %d/%d slots", current_label, slot_count, max_slots)
+        end
+        return string.format("%s  •  Role: [%s]  •  %d/%d slots", actor_name, current_label, slot_count, max_slots)
+    end
+    if has_name then
+        return string.format("%s  •  Unlabelled  •  %d/%d slots", actor_name, slot_count, max_slots)
+    end
+    return string.format("Unlabelled chest  •  %d/%d slots", slot_count, max_slots)
+end
+
+local function live_status_info(current_label)
+    local busy = type(organiser.is_busy) == "function" and organiser.is_busy()
+    local job_msg = type(organiser.job_status) == "function" and organiser.job_status() or nil
+
+    if busy then
+        return "REORGANISATION IN PROGRESS",
+            (job_msg and job_msg ~= "" and job_msg or "Reorganising storage..."),
+            GOLD
+    end
+    if state.action_status and state.action_status ~= "" then
+        return "STATUS", state.action_status, ACCENT
+    end
+    if job_msg and job_msg ~= "" then
+        return "LAST REORGANISATION", job_msg, ACCENT
+    end
+    if current_label then
+        return "STATUS", "Idle  •  Synced with base bank sorting", MUTED
+    end
+    return "STATUS", "Idle  •  Pick a name above to include in base sorting", MUTED
+end
+
+local function truncate_tab_text(text, max_len)
+    local s = tostring(text or "CHEST")
+    if #s <= max_len then return s end
+    return s:sub(1, math.max(1, max_len - 2)) .. ".."
+end
+
+local function update_chest_tabs(ui, inv, actor, theme)
+    local ce = package.loaded.rlm_chest_explorer
+    if not ce then
+        local ok_ce, mod_ce = pcall(require, "rlm_chest_explorer")
+        if ok_ce and type(mod_ce) == "table" then ce = mod_ce end
+    end
+    if not ce or type(ce.nearby_chests) ~= "function" then
+        state.tab_chests = {}
+        state.tab_targets = {}
+        return
+    end
+
+    local chests = ce.nearby_chests({ range_meters = 80 }) or {}
+    state.tab_chests = chests
+    local count = #chests
+    local active_idx = nil
+    for i, c in ipairs(chests) do
+        if ce.same_object(c.inv, inv) or ce.same_object(c.actor, actor) then
+            active_idx = i
+            break
+        end
+    end
+
+    if ui.tabs_header and valid(ui.tabs_header) then
+        local header_txt
+        if count <= 1 then
+            header_txt = "NEARBY CHESTS (1 IN REACH)"
+        else
+            local cur = active_idx and chests[active_idx] or chests[1]
+            header_txt = string.format("NEARBY CHESTS (%d / %d  •  %.1f m)", active_idx or 1, count, cur and cur.distance or 0)
+        end
+        pcall(function() ui.tabs_header:SetText(FText(header_txt)) end)
+    end
+
+    local multi = count >= 2
+    for _, nav_btn in ipairs({ ui.tab_prev, ui.tab_next }) do
+        if nav_btn and valid(nav_btn.holder) then
+            pcall(function() nav_btn.holder:SetVisibility(multi and 0 or 1) end)
+        end
+    end
+
+    state.tab_prev_chest = multi and chests[((active_idx or 1) - 2) % count + 1] or nil
+    state.tab_next_chest = multi and chests[(active_idx or 1) % count + 1] or nil
+
+    local win_start = 1
+    if active_idx and count >= 2 then
+        win_start = math.max(1, math.min(count - 1, active_idx))
+    end
+    state.tab_targets = {}
+    for slot_idx = 1, 2 do
+        local entry = chests[win_start + slot_idx - 1]
+        state.tab_targets[slot_idx] = entry
+        local btn = ui.tab_btns and ui.tab_btns[slot_idx]
+        if btn and valid(btn.holder) then
+            pcall(function() btn.holder:SetVisibility(entry and 0 or 1) end)
+            if entry and valid(btn.label) then
+                local is_active = active_idx ~= nil and (win_start + slot_idx - 1) == active_idx
+                local raw_name = tostring(entry.title or "Chest"):upper()
+                local label = is_active and ("* " .. truncate_tab_text(raw_name, 11)) or truncate_tab_text(raw_name, 13)
+                local col = is_active and ACCENT or CREAM
+                pcall(function()
+                    btn.label:SetText(FText(label))
+                    btn.label:SetColorAndOpacity({ SpecifiedColor = col, ColorUseRule = 0 })
+                end)
+                if valid(btn.bg) then
+                    glass.apply(btn.bg, is_active and "selected" or "inset", theme, 8)
+                end
+            end
+        end
+    end
+end
+
 local function refresh_contents(ui, inv, actor)
     if not ui or not valid(inv) or not valid(actor) then return end
 
     local current_label = organiser.label_of(actor)
-    local role_text = current_label and ("[" .. current_label .. "]") or "Unlabelled"
     local actor_name = safe_call(function() return actor:GetCustomName():ToString() end)
-    if type(actor_name) ~= "string" or actor_name == "" then actor_name = "Storage Container" end
+    if type(actor_name) ~= "string" then actor_name = "" end
 
     local slots = organiser.read_slots(inv)
     local max_slots = tonumber(safe_call(function() return inv.MaxSlotCount end, 0)) or #slots
     if valid(ui.caption) then
         pcall(function()
-            ui.caption:SetText(FText(string.format("%s  •  Role: %s  (%d/%d slots)", actor_name, role_text, #slots, max_slots)))
+            ui.caption:SetText(FText(format_chest_caption(actor_name, current_label, #slots, max_slots)))
         end)
     end
 
-    if ui.trash_btn and valid(ui.trash_btn.label) then
-        local tlabel = (current_label == "Trash") and "UNMARK TRASH" or "MARK AS TRASH"
-        pcall(function() ui.trash_btn.label:SetText(FText(tlabel)) end)
+    local suggestions = (type(organiser.top_label_suggestions) == "function")
+        and organiser.top_label_suggestions(inv, actor, 2)
+        or {}
+    state.sug_labels = {}
+    if valid(ui.sug_hint) then
+        local first = suggestions[1]
+        local hint = first and first.reason
+            and ("Top match: " .. tostring(first.reason))
+            or "Pick a role for automatic sorting"
+        pcall(function() ui.sug_hint:SetText(FText(hint)) end)
     end
 
-    local rec_label, rec_reason = organiser.recommend_chest_label(inv, actor)
-    state.rec_label = rec_label
-    if ui.rec_btn and valid(ui.rec_btn.label) then
-        local rec_text = string.format("SUGGESTED: %s (%s)", rec_label, rec_reason or "Best fit")
-        local is_active = current_label and rec_label and current_label:lower() == rec_label:lower()
-        pcall(function()
-            ui.rec_btn.label:SetText(FText(rec_text))
-            ui.rec_btn.label:SetColorAndOpacity({ SpecifiedColor = is_active and ACCENT or GOLD, ColorUseRule = 0 })
-        end)
-    end
-
-    for i, preset in ipairs(ROLE_PRESETS) do
-        local entry = ui.label_btns[i]
-        if entry and valid(entry.label) then
-            local is_active = current_label and current_label:lower() == preset.label:lower()
-            local text = is_active and ("* " .. preset.text) or preset.text
-            local color = is_active and ACCENT or (preset.label == "CLEAR" and MUTED or CREAM)
-            pcall(function()
-                entry.label:SetText(FText(text))
-                entry.label:SetColorAndOpacity({ SpecifiedColor = color, ColorUseRule = 0 })
-            end)
+    local theme = themes.active()
+    pcall(update_chest_tabs, ui, inv, actor, theme)
+    for i = 1, 2 do
+        local entry = ui.sug_btns[i]
+        local sug = suggestions[i]
+        local lbl = sug and sug.label or nil
+        state.sug_labels[i] = lbl
+        if entry and valid(entry.holder) then
+            pcall(function() entry.holder:SetVisibility(lbl and 0 or 1) end)
+            if lbl and valid(entry.label) then
+                local is_active = current_label and (current_label:lower() == lbl:lower())
+                local txt = is_active and ("* " .. lbl:upper()) or lbl:upper()
+                local col = is_active and ACCENT or CREAM
+                pcall(function()
+                    entry.label:SetText(FText(txt))
+                    entry.label:SetColorAndOpacity({ SpecifiedColor = col, ColorUseRule = 0 })
+                end)
+                if valid(entry.bg) then
+                    glass.apply(entry.bg, is_active and "selected" or "inset", theme, 8)
+                end
+            end
         end
     end
 
+    local st_hdr, st_body, st_col = live_status_info(current_label)
+    if valid(ui.status_title) then
+        pcall(function()
+            ui.status_title:SetText(FText(st_hdr))
+            ui.status_title:SetColorAndOpacity({ SpecifiedColor = st_col, ColorUseRule = 0 })
+        end)
+    end
     if valid(ui.status) then
-        pcall(function() ui.status:SetText(FText(state.status_message or "Ready.")) end)
+        pcall(function() ui.status:SetText(FText(st_body)) end)
     end
 end
 
+local function osrs_bank_mod()
+    local mod = package.loaded.rlm_osrs_bank_hud
+    if type(mod) == "table" then return mod end
+    local ok, loaded = pcall(require, "rlm_osrs_bank_hud")
+    return (ok and type(loaded) == "table") and loaded or nil
+end
+
 local function hide_panel()
+    local bank = osrs_bank_mod()
+    if bank and type(bank.hide) == "function" then pcall(bank.hide) end
     if state.ui and valid(state.ui.frame) then
         pcall(function() state.ui.frame:SetVisibility(1) end)
     end
     state.session_key = nil
+    state.auto_deposited_session = nil
 end
 
 local function set_status(msg)
-    state.status_message = tostring(msg or "")
+    state.action_status = tostring(msg or "")
     if state.ui and valid(state.ui.status) then
-        pcall(function() state.ui.status:SetText(FText(state.status_message)) end)
+        pcall(function() state.ui.status:SetText(FText(state.action_status)) end)
     end
 end
 
-local function run_click_action(action_id, inv, actor)
+local function run_click_action(action_id, inv, actor, api)
     if action_id == "deposit" then
-        local ok, msg = organiser.deposit_backpack()
+        local _, msg = organiser.deposit_backpack()
         set_status(msg)
     elseif action_id == "sort" then
-        local ok, msg = organiser.sort_open_storage()
+        local _, msg = organiser.sort_open_storage()
         set_status(msg)
     elseif action_id == "resort" then
-        local ok, msg = organiser.resort_nearby_storage()
+        local _, msg = organiser.resort_nearby_storage()
         set_status(msg)
     elseif action_id == "auto_organise" then
-        local ok, msg = organiser.auto_organise_base()
+        local _, msg = organiser.auto_organise_base()
         set_status(msg)
     elseif action_id == "fill_unlabelled" then
-        local ok, msg = organiser.auto_organise_base({ force_replan = false })
+        local _, msg = organiser.auto_organise_base({ force_replan = false })
         set_status(msg)
     elseif action_id == "replan_organise" then
-        local ok, msg = organiser.replan_organise_base()
+        local _, msg = organiser.replan_organise_base()
         set_status(msg)
-    elseif action_id == "toggle_trash" then
-        local current = organiser.label_of(actor)
-        local ctrl = engine.local_controller()
-        if current == "Trash" then
-            organiser.set_label(ctrl, actor, nil)
-            set_status("Removed Trash label.")
+    elseif action_id == "tab:prev" or action_id == "tab:next" or action_id:match("^tab:slot:%d+$") then
+        local target = nil
+        if action_id == "tab:prev" then
+            target = state.tab_prev_chest
+        elseif action_id == "tab:next" then
+            target = state.tab_next_chest
         else
-            organiser.set_label(ctrl, actor, "Trash")
-            set_status("Marked as Trash incinerator.")
+            local tab_idx = tonumber(action_id:match("^tab:slot:(%d+)$"))
+            target = tab_idx and state.tab_targets and state.tab_targets[tab_idx] or nil
         end
-    elseif action_id == "role_rec" then
-        local chosen = state.rec_label
+        if not target or not valid(target.inv) then
+            set_status("No other nearby chest available.")
+        else
+            local ce = package.loaded.rlm_chest_explorer or require("rlm_chest_explorer")
+            local ok_sw, err_sw = ce.switch_open_chest(api, target.inv)
+            if ok_sw then
+                inv = target.inv
+                actor = target.actor or actor
+                state.session_key = full_name(actor)
+                state.auto_deposited_session = true
+                set_status("Viewing " .. (target.title or "chest") .. ".")
+            else
+                set_status(tostring(err_sw or "Failed to switch chest tab."))
+            end
+        end
+    elseif action_id == "switch_osrs" then
+        organiser.set_setting("osrsBankMode", true)
+        if state.ui and valid(state.ui.frame) then
+            pcall(function() state.ui.frame:SetVisibility(1) end)
+        end
+        state.last_render_key = nil
+        set_status("Switching to OSRS Bank View...")
+        return
+    elseif action_id == "open_full" then
+        hide_panel()
+        if valid(api) then
+            pcall(function() api:CloseCurrentInventory() end)
+        end
+        state.pending_open_menu = true
+        return
+    else
+        local idx_str = tostring(action_id):match("^sug:(%d+)$")
+        local idx = idx_str and tonumber(idx_str) or nil
+        local chosen = idx and state.sug_labels[idx] or nil
         if chosen then
             local ctrl = engine.local_controller()
             organiser.set_label(ctrl, actor, chosen)
             set_status("Labelled container: " .. chosen)
-        end
-    else
-        local idx_str = tostring(action_id):match("^role:(%d+)$")
-        local idx = idx_str and tonumber(idx_str) or nil
-        local preset = idx and ROLE_PRESETS[idx] or nil
-        if preset then
-            local ctrl = engine.local_controller()
-            if preset.label == "CLEAR" then
-                organiser.set_label(ctrl, actor, nil)
-                set_status("Container label cleared.")
-            else
-                organiser.set_label(ctrl, actor, preset.label)
-                set_status("Labelled container: " .. preset.label)
-            end
         end
     end
     refresh_contents(state.ui, inv, actor)
@@ -600,8 +826,17 @@ end
 
 local function tick()
     if not state.started then return end
-    local driver = rawget(_G, "__RSDW_PUBLIC_ORGANISER_DOCK")
+    local driver = rawget(_G, "__RLM_ORGANISER_HUD_DRIVER")
     if type(driver) == "table" then driver.last_tick_at = os.clock() end
+
+    if state.pending_open_menu then
+        state.pending_open_menu = false
+        local rlm_ui = package.loaded.rlm_ui
+        if rlm_ui and type(rlm_ui.open_module) == "function" then
+            pcall(rlm_ui.open_module, "organiser")
+        end
+        return
+    end
 
     local settings = organiser.settings()
     if settings.autoOpenOnStorage == false then
@@ -622,11 +857,73 @@ local function tick()
         return
     end
 
-    local inv, actor, _, open_panel = organiser.open_storage()
+    local inv, actor, api, open_panel = organiser.open_storage()
     if not valid(inv) or not valid(actor) then
         state.last_diag = nil
         hide_panel()
         return
+    end
+
+    if settings.osrsBankMode ~= false then
+        if state.ui and valid(state.ui.frame) then
+            pcall(function() state.ui.frame:SetVisibility(1) end)
+        end
+        local key = full_name(actor)
+        if state.session_key ~= key then
+            state.session_key = key
+            if settings.autoDepositOnOpen == true and not state.auto_deposited_session then
+                state.auto_deposited_session = true
+                pcall(organiser.deposit_backpack)
+            end
+            state.auto_deposited_session = true
+        end
+        local bank = osrs_bank_mod()
+        local ce = package.loaded.rlm_chest_explorer
+        if not ce then
+            local ok_ce, loaded_ce = pcall(require, "rlm_chest_explorer")
+            if ok_ce and type(loaded_ce) == "table" then ce = loaded_ce end
+        end
+        if bank and ce then
+            if state.pending_press then
+                local pressed_name = state.pending_press
+                state.pending_press = nil
+                if state.action_map[pressed_name] and type(bank.handle_press) == "function" then
+                    pcall(bank.handle_press, state.action_map[pressed_name])
+                end
+            end
+            if state.pending_release then
+                local rel_name = state.pending_release
+                state.pending_release = nil
+                if type(bank.handle_release) == "function" then
+                    local ok_rel, dropped = pcall(bank.handle_release, state.action_map[rel_name], inv, actor, api, organiser, ce)
+                    if ok_rel and dropped == true then
+                        -- Suppress click-withdraw if releasing finished a drag onto a chest tab
+                        if state.pending_click and state.action_map[state.pending_click]
+                            and tostring(state.action_map[state.pending_click]):match("^bank:tile:") then
+                            state.pending_click = nil
+                        end
+                    end
+                end
+            end
+            local clicked = state.pending_click
+            state.pending_click = nil
+            if clicked and state.action_map[clicked] then
+                local act = state.action_map[clicked]
+                local ok_clk, clk_res = pcall(bank.handle_click, act, inv, actor, api, organiser, ce)
+                if ok_clk and clk_res == "open_menu" then
+                    hide_panel()
+                    state.pending_open_menu = true
+                    return
+                end
+            end
+            local ok_ren, ren_res, ren_err = pcall(bank.render, pc, open_panel, inv, actor, api, organiser, ce, state.action_map)
+            if ok_ren and ren_res ~= false then return end
+            diag_once("osrs_fallback", "OSRS Bank render failed; using Compact Dock: " .. tostring(ok_ren and ren_err or ren_res))
+            pcall(bank.hide)
+        end
+    else
+        local bank = osrs_bank_mod()
+        if bank and type(bank.hide) == "function" then pcall(bank.hide) end
     end
 
     local host = refresh_hosts(open_panel)
@@ -676,11 +973,13 @@ local function tick()
     if state.session_key ~= key then
         state.session_key = key
         state.last_render_key = nil
-        state.status_message = "Ready."
-        if settings.autoDepositOnOpen == true then
-            local ok, msg = organiser.deposit_backpack()
-            if msg and msg ~= "" then state.status_message = msg end
+        state.action_status = nil
+        if settings.autoDepositOnOpen == true and not state.auto_deposited_session then
+            state.auto_deposited_session = true
+            local _, msg = organiser.deposit_backpack()
+            if msg and msg ~= "" then state.action_status = msg end
         end
+        state.auto_deposited_session = true
         fit_panel_height(state.ui)
         pcall(function() state.ui.frame:SetVisibility(0) end)
         diag_once("shown:" .. key, string.format("shown for %s (%s)",
@@ -692,20 +991,23 @@ local function tick()
     state.pending_click = nil
     if clicked and state.action_map[clicked] then
         state.last_render_key = nil
-        pcall(run_click_action, state.action_map[clicked], inv, actor)
+        pcall(run_click_action, state.action_map[clicked], inv, actor, api)
         return
     end
 
-    if type(organiser.job_status) == "function" then
-        local live_job_msg = organiser.job_status()
-        if live_job_msg and live_job_msg ~= "" and (organiser.is_busy and organiser.is_busy() or state.status_message:find("...", 1, true)) then
-            state.status_message = live_job_msg
-        end
+    local busy_now = type(organiser.is_busy) == "function" and organiser.is_busy() or false
+    local live_job_msg = type(organiser.job_status) == "function" and organiser.job_status() or nil
+    if busy_now and live_job_msg and live_job_msg ~= "" then
+        state.action_status = live_job_msg
+    elseif not busy_now and live_job_msg and live_job_msg ~= ""
+        and type(state.action_status) == "string" and state.action_status:find("...", 1, true) then
+        state.action_status = live_job_msg
     end
 
     local current_label = organiser.label_of(actor) or ""
     local slots = organiser.read_slots(inv)
-    local render_key = key .. "|" .. current_label .. "|" .. tostring(#slots) .. "|" .. tostring(state.status_message)
+    local render_key = key .. "|" .. current_label .. "|" .. tostring(#slots) .. "|"
+        .. tostring(busy_now) .. "|" .. tostring(live_job_msg or "") .. "|" .. tostring(state.action_status or "")
     if state.last_render_key ~= render_key then
         state.last_render_key = render_key
         refresh_contents(state.ui, inv, actor)
@@ -714,15 +1016,15 @@ local function tick()
 end
 
 local function driver_table()
-    local d = rawget(_G, "__RSDW_PUBLIC_ORGANISER_DOCK")
+    local d = rawget(_G, "__RLM_ORGANISER_HUD_DRIVER")
     if type(d) ~= "table" then
         d = { started = false, click_hook_reg = nil, tick = nil, on_click = nil }
-        _G.__RSDW_PUBLIC_ORGANISER_DOCK = d
+        _G.__RLM_ORGANISER_HUD_DRIVER = d
     end
     return d
 end
 
-function M.on_storage_opened()
+function M.on_storage_opened(api)
     -- When the docked panel is active in-game, tick() handles showing it beside the chest.
     if state.started and state.stage ~= "broken" then
         state.next_host_scan = 0
@@ -731,7 +1033,7 @@ function M.on_storage_opened()
     return false
 end
 
-function M.on_storage_closed()
+function M.on_storage_closed(api)
     hide_panel()
 end
 
@@ -744,6 +1046,10 @@ function M.state()
 end
 
 function M.start(bootstrap_state)
+    local driver = driver_table()
+    if type(driver.active_stop) == "function" and driver.active_stop ~= M.stop then
+        pcall(driver.active_stop)
+    end
     if state.started then return true end
     if type(bootstrap_state) == "table" then
         state.config = bootstrap_state.config
@@ -751,22 +1057,45 @@ function M.start(bootstrap_state)
     state.started = true
     state.stage = "idle"
     state.pending_click = nil
-    state.last_diag = nil
+    state.pending_open_menu = false
 
-    local driver = driver_table()
+    driver.active_stop = M.stop
     driver.tick = function()
         local ok, err = pcall(tick)
         if not ok then log.warn("Organiser HUD tick failed: " .. tostring(err)) end
     end
     driver.on_click = function(btn_name)
         if state.started and state.action_map[btn_name] then
+            log.info("Bank click: " .. tostring(state.action_map[btn_name]))
             state.pending_click = btn_name
+        end
+    end
+    driver.on_press = function(btn_name)
+        if state.started and state.action_map[btn_name] then
+            local act = state.action_map[btn_name]
+            log.info("Bank press: " .. tostring(act))
+            state.pending_press = btn_name
+            local bank = osrs_bank_mod()
+            if bank and type(bank.handle_press) == "function" and tostring(act):match("^bank:tile:") then
+                pcall(bank.handle_press, act)
+                state.pending_press = nil
+            end
+        end
+    end
+    driver.on_release = function(btn_name)
+        if state.started and state.action_map[btn_name] then
+            log.info("Bank release: " .. tostring(state.action_map[btn_name]))
+            state.pending_release = btn_name
+            local bank = osrs_bank_mod()
+            if bank and type(bank.capture_release) == "function" then
+                pcall(bank.capture_release)
+            end
         end
     end
 
     if not driver.started and type(LoopInGameThreadWithDelay) == "function" then
         local ok, err = pcall(LoopInGameThreadWithDelay, 250, function()
-            local d = rawget(_G, "__RSDW_PUBLIC_ORGANISER_DOCK")
+            local d = rawget(_G, "__RLM_ORGANISER_HUD_DRIVER")
             if d and type(d.tick) == "function" then d.tick() end
         end)
         if ok then
@@ -776,13 +1105,12 @@ function M.start(bootstrap_state)
         end
     end
 
-    local async_started = false
     local async_mod = package.loaded.rlm_async
     if type(async_mod) == "table" and type(async_mod.after) == "function" then
         driver.async_gen = (driver.async_gen or 0) + 1
         local my_gen = driver.async_gen
         local function async_pump()
-            local d = rawget(_G, "__RSDW_PUBLIC_ORGANISER_DOCK")
+            local d = rawget(_G, "__RLM_ORGANISER_HUD_DRIVER")
             if not d or d.async_gen ~= my_gen or type(d.tick) ~= "function" then return end
             -- Only step via rlm_async if the primary LoopInGameThreadWithDelay hasn't ticked recently
             if (os.clock() - (d.last_tick_at or 0)) >= 0.40 then
@@ -790,32 +1118,53 @@ function M.start(bootstrap_state)
             end
             async_mod.after(0.25, async_pump)
         end
-        async_started = pcall(async_mod.after, 0.25, async_pump)
+        pcall(async_mod.after, 0.25, async_pump)
     end
 
     if type(RegisterHook) == "function" and driver.click_hook_reg ~= RegisterHook then
         local ok = pcall(RegisterHook, "/Script/CommonUI.CommonButtonBase:HandleButtonClicked", function(self)
             local ok_n, name = pcall(function() return self:get():GetFullName() end)
             if ok_n and name then
-                local d = rawget(_G, "__RSDW_PUBLIC_ORGANISER_DOCK")
+                local d = rawget(_G, "__RLM_ORGANISER_HUD_DRIVER")
                 if d and type(d.on_click) == "function" then d.on_click(name) end
             end
         end)
         if ok then driver.click_hook_reg = RegisterHook end
     end
-
-    if not driver.started and not async_started then
-        state.started = false
-        driver.tick = nil
-        driver.on_click = nil
-        return false, "game-thread loop is unavailable"
+    if type(RegisterHook) == "function" and driver.drag_hooks_bp_reg ~= RegisterHook then
+        local function hook_press(path)
+            return pcall(RegisterHook, path, function(self)
+                local ok_n, name = pcall(function() return self:get():GetFullName() end)
+                if ok_n and name then
+                    local d = rawget(_G, "__RLM_ORGANISER_HUD_DRIVER")
+                    if d and type(d.on_press) == "function" then d.on_press(name) end
+                end
+            end)
+        end
+        local function hook_release(path)
+            return pcall(RegisterHook, path, function(self)
+                local ok_n, name = pcall(function() return self:get():GetFullName() end)
+                if ok_n and name then
+                    local d = rawget(_G, "__RLM_ORGANISER_HUD_DRIVER")
+                    if d and type(d.on_release) == "function" then d.on_release(name) end
+                end
+            end)
+        end
+        hook_press("/Script/CommonUI.CommonButtonBase:BP_OnPressed")
+        hook_release("/Script/CommonUI.CommonButtonBase:BP_OnReleased")
+        hook_press("/Script/CommonUI.CommonButtonBase:HandleButtonPressed")
+        hook_release("/Script/CommonUI.CommonButtonBase:HandleButtonReleased")
+        driver.drag_hooks_bp_reg = RegisterHook
     end
+
     log.info("Organiser docked chest HUD ready")
     return true
 end
 
 function M.stop()
     state.started = false
+    local bank = osrs_bank_mod()
+    if bank and type(bank.stop) == "function" then pcall(bank.stop) end
     hide_panel()
     if state.ui and valid(state.ui.frame) then
         pcall(function() state.ui.frame:RemoveFromParent() end)
@@ -827,10 +1176,18 @@ function M.stop()
     state.stage = "idle"
     state.action_map = {}
     state.pending_click = nil
+    state.pending_press = nil
+    state.pending_release = nil
+    state.pending_open_menu = false
 
     local driver = driver_table()
     driver.tick = nil
     driver.on_click = nil
+    driver.on_press = nil
+    driver.on_release = nil
+    if driver.active_stop == M.stop then
+        driver.active_stop = nil
+    end
     return true
 end
 

@@ -3,7 +3,7 @@
   "id": "organiser",
   "name": "Organiser",
   "description": "RuneScape-style base bank organiser: automatic bank-sorted chest roles, container slot sorting, multi-chest re-sorting, storage and workstation advisor, item retention locks, and trash incineration.",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "order": 25,
   "entry": "module.lua",
   "ui": {
@@ -11,12 +11,18 @@
     "actions": [
       {
         "id": "auto-organise",
-        "label": "AUTO-ORGANISE BASE",
+        "label": "RE-PLAN & RENAME CHESTS",
         "requiresInput": false
+      },
+      {
+        "id": "fill-unlabelled",
+        "label": "FILL UNLABELLED CHESTS",
+        "primary": true
       },
       {
         "id": "deposit",
         "label": "DEPOSIT BACKPACK",
+        "primary": true,
         "requiresInput": false
       },
       {
@@ -37,18 +43,53 @@
       {
         "id": "label",
         "label": "LABEL STORAGE",
+        "primary": true,
         "inputHint": "Label (Ash Logs, All: Wood, Misc, Trash, CLEAR)",
         "requiresInput": true
       },
       {
         "id": "lock",
         "label": "SET LOCK",
+        "primary": true,
         "inputHint": "Keep count: all, 0 (unlock), 1, 5, 10, 20, 50",
         "requiresInput": true
       },
       {
         "id": "trash",
         "label": "TOGGLE TRASH",
+        "requiresInput": false
+      },
+      {
+        "id": "search-items",
+        "label": "SEARCH CHESTS",
+        "primary": true,
+        "inputHint": "Item name (e.g. Crucible, Iron, Ore, blank = all)",
+        "requiresInput": true
+      },
+      {
+        "id": "clear-search",
+        "label": "SHOW ALL ITEMS",
+        "requiresInput": false
+      },
+      {
+        "id": "withdraw-one",
+        "label": "WITHDRAW 1",
+        "primary": true,
+        "requiresInput": false
+      },
+      {
+        "id": "withdraw-stack",
+        "label": "WITHDRAW STACK",
+        "requiresInput": false
+      },
+      {
+        "id": "inspect-hit-chest",
+        "label": "OPEN CHEST VIEW",
+        "requiresInput": false
+      },
+      {
+        "id": "pin-chest",
+        "label": "PIN CHEST ON MAP",
         "requiresInput": false
       }
     ]

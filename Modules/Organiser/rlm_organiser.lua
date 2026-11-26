@@ -6,7 +6,7 @@ local engine = require("rlm_engine")
 local log = require("rlm_log")
 local store = require("rlm_store")
 
-local M = { VERSION = "0.3.4" }
+local M = { VERSION = "0.3.6" }
 
 local NAME_LIMIT = 16
 local PAGE_ITEMS, PAGE_RUNES, PAGE_AMMO = 1, 2, 3
@@ -879,12 +879,22 @@ local function is_private_locked_from_local(ownership)
     return true
 end
 
+local function matches_actor_entry(actor, addr, target_actor, target_addr)
+    if target_actor and actor == target_actor then return true end
+    if target_addr ~= nil and addr ~= nil and addr == target_addr then return true end
+    return false
+end
+
 local function is_local_open_actor(actor, opts)
-    if type(opts) ~= "table" or not opts.open_actor then return false end
-    if actor == opts.open_actor then return true end
-    if opts.open_addr ~= nil then
-        local addr = safe_call(function() return actor:GetAddress() end)
-        if addr ~= nil and addr == opts.open_addr then return true end
+    if type(opts) ~= "table" then return false end
+    local addr = safe_call(function() return actor:GetAddress() end)
+    if matches_actor_entry(actor, addr, opts.open_actor, opts.open_addr) then return true end
+    if matches_actor_entry(actor, addr, opts.keep_actor, opts.keep_addr) then return true end
+    if type(opts.keep_actors) == "table" then
+        for index, kept in ipairs(opts.keep_actors) do
+            local kept_addr = type(opts.keep_addrs) == "table" and opts.keep_addrs[index] or nil
+            if matches_actor_entry(actor, addr, kept, kept_addr) then return true end
+        end
     end
     return false
 end
@@ -905,9 +915,11 @@ local function is_built_storage(actor, settings, opts)
     end
 
     local linked = safe_call(function() return actor.LinkedInventoryComponent end)
+    local is_locked = engine.is_valid(linked)
+        and safe_call(function() return linked.bIsLocked end, false) == true or false
+    local include_locked = type(opts) == "table" and opts.include_locked == true
     if engine.is_valid(linked) then
-        if safe_call(function() return linked.bIsLocked end, false) == true
-            and not is_local_open_actor(actor, opts) then
+        if is_locked and not include_locked and not is_local_open_actor(actor, opts) then
             return false
         end
     elseif is_remote_client() and has_world_linked_storage() then
@@ -1144,14 +1156,22 @@ function M.bank_themes()
     return BANK_THEMES
 end
 
-function M.all_storage_in_reach(origin, settings)
+function M.all_storage_in_reach(origin, settings, opts)
     if not origin or type(FindAllOf) ~= "function" then return {} end
     local max_range = (settings and settings.rangeMeters or 40) * 100
     local reach_squared = max_range * max_range
 
     local open_inv, open_actor = M.open_storage()
     local open_addr = open_actor and safe_call(function() return open_actor:GetAddress() end) or nil
-    local storage_opts = open_actor and { open_actor = open_actor, open_addr = open_addr } or nil
+    local storage_opts = {
+        open_actor = open_actor,
+        open_addr = open_addr,
+        include_locked = type(opts) == "table" and opts.include_locked == true,
+        keep_actor = type(opts) == "table" and opts.keep_actor or nil,
+        keep_addr = type(opts) == "table" and opts.keep_addr or nil,
+        keep_actors = type(opts) == "table" and opts.keep_actors or nil,
+        keep_addrs = type(opts) == "table" and opts.keep_addrs or nil,
+    }
 
     local results = {}
     local seen_actors = {}
@@ -1180,6 +1200,8 @@ function M.all_storage_in_reach(origin, settings)
                     pos = pos,
                     slots = slots,
                     maxSlots = max_slots,
+                    locked = engine.is_valid(safe_call(function() return actor.LinkedInventoryComponent end))
+                        and safe_call(function() return actor.LinkedInventoryComponent.bIsLocked end, false) == true or false,
                 }
             end
         end
@@ -3472,6 +3494,59 @@ function M.arm_hooks(chest_hud)
         end
     end
 end
+
+function M.transfer_single_slot(ctrl, src_inv, src_slot, dst_inv, dst_slot, amount, is_split, on_done)
+    local inv_ctrl = ctrl
+    if engine.is_valid(ctrl) and safe_call(function() return ctrl.MoveItemBetweenInventories end) == nil then
+        local nested = safe_call(function() return ctrl.InventoryController end)
+        if engine.is_valid(nested) then inv_ctrl = nested end
+    end
+    if not engine.is_valid(inv_ctrl) or not engine.is_valid(src_inv) or not engine.is_valid(dst_inv) then
+        if type(on_done) == "function" then on_done(false, "invalid inventory or controller") end
+        return false, "invalid inventory or controller"
+    end
+    ctrl = inv_ctrl
+    if not is_remote_client() then
+        local ok, rpc_result = pcall(function()
+            if is_split and amount and amount > 0 then
+                return ctrl:SplitAndPutStack(src_inv, src_slot, amount, dst_inv, dst_slot)
+            end
+            return ctrl:MoveItemBetweenInventories(src_inv, src_slot, dst_inv, dst_slot)
+        end)
+        local success = ok and rpc_result ~= false
+        if not success then
+            log.warn(("transfer_single_slot failed: split=%s amount=%s src=%s dst=%s result=%s")
+                :format(tostring(is_split), tostring(amount), tostring(src_slot), tostring(dst_slot),
+                    tostring(rpc_result)))
+        end
+        local reason = success and nil or ("inventory transfer rejected (" .. tostring(rpc_result) .. ")")
+        if type(on_done) == "function" then on_done(success, reason) end
+        return success, reason
+    end
+
+    if remote_job ~= nil then
+        if type(on_done) == "function" then on_done(false, "another transfer is active") end
+        return false, "another transfer is active"
+    end
+
+    remote_job_token = remote_job_token + 1
+    local token = remote_job_token
+    remote_job = "withdraw"
+    remote_job_status = "Withdrawing item..."
+    execute_remote_transfer(token, ctrl, src_inv, src_slot, dst_inv, dst_slot, amount, is_split,
+        function(ok, err)
+            if token == remote_job_token then
+                remote_job = nil
+                remote_job_status = ok and "Withdrawal complete." or tostring(err or "withdrawal failed")
+            end
+            if type(on_done) == "function" then on_done(ok, err) end
+        end)
+    return true, nil
+end
+
+M.backpack_slot_ranges = backpack_slot_ranges
+M.is_remote_client = is_remote_client
+M.is_private_locked_from_local = is_private_locked_from_local
 
 function M.stop()
     local registry = rawget(_G, HOOK_DISPATCH)

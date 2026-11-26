@@ -1,5 +1,14 @@
 # Handoff
 
+## Organiser 0.3.6: Chest explorer and bank interface
+
+Organiser 0.3.6 adds a self-contained public chest explorer and bank-style interface for built storage. The manager view can search accessible nearby chests, inspect their contents, withdraw one item or a stack, and hand a temporary destination to the public Map module. The chest HUD adds bank tabs, search, paging and drag-aware interaction using generated local artwork.
+
+- `module.lua` retains the public lifecycle contract: it registers `organiser.json`, starts one HUD owner, arms the storage hooks and stops the service and HUD cleanly on reload.
+- `rlm_chest_explorer.lua` provides read-oriented chest discovery/search plus explicit player-requested withdrawals through Organiser's existing local/remote transfer paths.
+- Private shortcut bindings, cheat services, teleport actions and deposit XP rewards remain outside this repository. Trash incineration remains off by default.
+- Static coverage includes the existing Organiser suite plus mocked explorer, withdrawal, pin and bank-tab checks. Live behavior still requires the checklist in `Docs/TEST_PLAN.md`.
+
 ## Organiser 0.3.5
 
 - The chest sidebar uses the public shell's shared Graphite surface when

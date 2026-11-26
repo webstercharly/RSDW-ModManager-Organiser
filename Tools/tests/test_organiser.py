@@ -67,21 +67,47 @@ end
 package.loaded.rlm_store = fake_store
 package.loaded.rlm_log = fake_log
 package.loaded.rlm_engine = fake_engine
+package.loaded.rlm_glass = {
+    apply = function() return true end,
+    mount_panel = function(frame, content)
+        pcall(function() frame:AddChild(content) end)
+        return true
+    end,
+}
+package.loaded.rlm_ui_theme = {
+    active = function()
+        return { colors = {
+            gold = { R = 1, G = 0.8, B = 0.3, A = 1 },
+            cream = { R = 0.9, G = 0.9, B = 0.8, A = 1 },
+            muted = { R = 0.6, G = 0.6, B = 0.6, A = 1 },
+        } }
+    end,
+}
+package.loaded.rlm_ui_kit = { style_button_label = function() return true end }
 local service, hud
 local native_loadfile = loadfile
 function loadfile(path)
     local chunk, reason = native_loadfile(path)
     if not chunk then return nil, reason end
-    if path:match("/rlm_organiser%.lua$") then
+    if path:match("[/\\]rlm_organiser%.lua$") then
         return function()
             service = chunk()
             return service
         end
-    elseif path:match("/rlm_organiser_hud%.lua$") then
+    elseif path:match("[/\\]rlm_organiser_hud%.lua$") then
         return function(organiser)
             hud = chunk(organiser)
             return hud
         end
+    elseif path:match("[/\\]rlm_chest_explorer%.lua$") then
+        return function()
+            return {
+                nearby_chests = function() return {} end,
+                search_items = function() return {}, { chests = 0 } end,
+            }
+        end
+    elseif path:match("[/\\]rlm_osrs_bank_hud%.lua$") then
+        return function() return { stop = function() end } end
     end
     return chunk
 end
@@ -124,7 +150,7 @@ class OrganiserManifestTests(unittest.TestCase):
         self.assertIn("label", action_ids)
         self.assertIn("lock", action_ids)
         self.assertIn("trash", action_ids)
-        self.assertEqual(manifest["version"], "0.3.5")
+        self.assertEqual(manifest["version"], "0.3.6")
 
 @unittest.skipIf(LuaRuntime is None, "lupa is not installed")
 class OrganiserServiceTests(unittest.TestCase):
@@ -244,7 +270,7 @@ class OrganiserServiceTests(unittest.TestCase):
 
     def test_module_activate_overview_view(self):
         view = self.module.activate(None)
-        self.assertIn("STORAGE ORGANISER", view["status"])
+        self.assertEqual(view["preview"]["title"], "Storage Organiser")
         self.assertIsInstance(view["rows"], object)
 
     def test_module_navigation_subviews(self):
@@ -258,13 +284,13 @@ class OrganiserServiceTests(unittest.TestCase):
         handled = self.module.select_row(None, "nav:settings")
         self.assertTrue(handled)
         view = self.module.activate(None)
-        self.assertIn("ORGANISER SETTINGS", view["status"])
+        self.assertEqual(view["status"], "Organiser Settings")
 
         # Navigate back to overview
         handled = self.module.select_row(None, "nav:overview")
         self.assertTrue(handled)
         view = self.module.activate(None)
-        self.assertIn("STORAGE ORGANISER", view["status"])
+        self.assertEqual(view["preview"]["title"], "Storage Organiser")
 
     def test_module_run_action_deposit_fails_safely_when_no_controller(self):
         ok, msg = self.module.run_action(None, "deposit", "")
@@ -529,7 +555,7 @@ class OrganiserServiceTests(unittest.TestCase):
         self.lua.globals().record_storage_open()
         self.lua.execute("for _, callback in ipairs(pending) do callback() end")
         self.assertEqual(self.lua.globals().dock_loops, 1)
-        self.assertEqual(len(list(self.lua.globals().bound_hooks.keys())), 4)
+        self.assertEqual(len(list(self.lua.globals().bound_hooks.keys())), 8)
         self.assertEqual(self.lua.globals().old_calls, 0)
         self.assertEqual(self.lua.globals().new_calls, 1)
         self.assertEqual(self.t["document"]()["settings"]["rangeMeters"], 60)
@@ -597,7 +623,8 @@ class OrganiserServiceTests(unittest.TestCase):
         self.assertIsNotNone(api)
         self.assertIsNotNone(panel)
         view = self.module.activate(None)
-        self.assertEqual(view["rows"][1]["title"], "OPEN STORAGE: UNLABELLED")
+        self.assertIn("Open Storage", view["rows"][1]["title"])
+        self.assertIn("Unlabelled", view["rows"][1]["title"])
 
     def test_world_loot_chest_skips_open_and_close_actions(self):
         self.lua.execute(r"""
@@ -642,6 +669,7 @@ class OrganiserServiceTests(unittest.TestCase):
         self.assertEqual(self.lua.globals().loot_actions, 0)
 
     def test_organiser_hud_staged_dock_and_visibility_lifecycle(self):
+        self.organiser.set_setting("osrsBankMode", False)
         self.lua.execute(r"""
         _G.__HUD_STATE_VIS = {}
         local created_objs = {}
@@ -1551,6 +1579,7 @@ class OrganiserServiceTests(unittest.TestCase):
 
     def test_open_storage_fallback_and_hud_async_backup_pump(self):
         hud_source = (MODULE_DIR / "rlm_organiser_hud.lua").read_text(encoding="utf-8")
+        self.organiser.set_setting("osrsBankMode", False)
         self.lua.execute(r"""
         local player_inv = { _kind = "player", MaxSlotCount = 40 }
         _G.__TEST_CONTROLLER = {
@@ -1705,7 +1734,7 @@ class OrganiserServiceTests(unittest.TestCase):
             if cls == "WBP_WorldActorInventory_MainPanel_C" then return host_panel end
             return nil
         end
-        _G.__RSDW_PUBLIC_ORGANISER_DOCK = nil
+        _G.__RLM_ORGANISER_HUD_DRIVER = nil
         _G.__BACKUP_HUD_VIS = nil
         _G.__ASYNC_CALLBACKS = async_callbacks
         """)
@@ -1715,7 +1744,7 @@ class OrganiserServiceTests(unittest.TestCase):
         _G.__TMP_HUD = ...
         _G.__TMP_HUD.start({})
         for i = 1, 4 do
-            _G.__RSDW_PUBLIC_ORGANISER_DOCK.last_tick_at = os.clock() - 1.0
+            _G.__RLM_ORGANISER_HUD_DRIVER.last_tick_at = os.clock() - 1.0
             local cb = _G.__ASYNC_CALLBACKS[i]
             if cb then cb.fn() end
         end

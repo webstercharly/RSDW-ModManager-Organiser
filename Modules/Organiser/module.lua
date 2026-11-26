@@ -4,18 +4,56 @@
 local engine = require("rlm_engine")
 local log = require("rlm_log")
 local store = require("rlm_store")
+local source = (debug.getinfo(1, "S").source or ""):gsub("^@", "")
+local module_dir = assert(source:match("^(.*)[/\\][^/\\]+$"), "Organiser module path is unavailable")
+if not package.path:find(module_dir, 1, true) then
+    package.path = module_dir .. "/?.lua;" .. package.path
+end
 
-local M = { VERSION = "0.3.4" }
-local source = debug.getinfo(1, "S").source
-local module_dir = assert(source:match("^@(.*)[/\\][^/\\]+$"), "Organiser module path is unavailable")
+for _, name in ipairs({ "rlm_osrs_bank_hud", "rlm_organiser_hud" }) do
+    local previous = package.loaded[name]
+    if type(previous) == "table" and type(previous.stop) == "function" then pcall(previous.stop) end
+    package.loaded[name] = nil
+end
+
 local organiser = assert(loadfile(module_dir .. "/rlm_organiser.lua"))()
-assert(organiser.VERSION == M.VERSION, "Organiser service version mismatch")
-local hud = assert(loadfile(module_dir .. "/rlm_organiser_hud.lua"))(organiser)
+package.loaded.rlm_organiser = organiser
+local chest_explorer = assert(loadfile(module_dir .. "/rlm_chest_explorer.lua"))()
+package.loaded.rlm_chest_explorer = chest_explorer
+local bank_chunk, bank_error = loadfile(module_dir .. "/rlm_osrs_bank_hud.lua")
+if bank_chunk then
+    local ok, bank = pcall(bank_chunk)
+    if ok and type(bank) == "table" then package.loaded.rlm_osrs_bank_hud = bank
+    else log.warn("OSRS Bank HUD load failed: " .. tostring(bank)) end
+else
+    log.warn("OSRS Bank HUD compile failed: " .. tostring(bank_error))
+end
+local hud_chunk, hud_error = loadfile(module_dir .. "/rlm_organiser_hud.lua")
+if hud_chunk then
+    local ok, hud = pcall(hud_chunk, organiser)
+    if ok and type(hud) == "table" then package.loaded.rlm_organiser_hud = hud
+    else log.warn("Organiser HUD load failed: " .. tostring(hud)) end
+else
+    log.warn("Organiser HUD compile failed: " .. tostring(hud_error))
+end
 
+local M = {}
+local storage_error = nil
 local current_view = "overview"
 local selected_lock_item = nil
-local last_message = "Manage container labels, retention locks, and quick deposit."
-local storage_error
+local last_message
+local nearby_page = 1
+local NEARBY_PER_PAGE = 12
+local search_query = ""
+local find_page = 1
+local FIND_PER_PAGE = 12
+local selected_hit = nil
+local last_find_hits = {}
+local last_nearby_chests = {}
+local selected_chest_key = nil
+local selected_chest_slot = nil
+local chest_page = 1
+local CHEST_PER_PAGE = 12
 
 local REACH_PRESETS = { 10, 20, 30, 40, 60, 100 }
 
@@ -28,145 +66,296 @@ local function find_next_preset(current, presets)
     return presets[1]
 end
 
-local function overview_view()
-    local s = organiser.settings()
+local function nearby_storage()
+    local settings = organiser.settings()
     local controller = engine.local_controller()
     local pawn = controller and controller.Pawn
     local pawn_pos = pawn and engine.is_valid(pawn) and pawn:K2_GetActorLocation() or nil
+    local nearby = pawn_pos and organiser.labelled_storage_in_reach(pawn_pos, settings) or {}
+    return nearby, settings.rangeMeters or 40
+end
 
-    local _, open_actor = organiser.open_storage()
-    local nearby = pawn_pos and organiser.labelled_storage_in_reach(pawn_pos, s) or {}
+local function accessible_chests()
+    if chest_explorer and type(chest_explorer.nearby_chests) == "function" then
+        return chest_explorer.nearby_chests()
+    end
+    return nearby_storage()
+end
 
+local function find_chest_by_key(chests, key)
+    for _, c in ipairs(chests or {}) do
+        if c.key == key then return c end
+    end
+    return nil
+end
+
+local function link(title, view_id)
+    return { title = title .. "  ›", value = "nav:" .. view_id, compact = true, destination = true }
+end
+
+local function back(title, target_view)
+    return { title = "‹  " .. (title or "Organiser"), value = "nav:" .. (target_view or "overview"), compact = true }
+end
+
+local function overview_view(state)
+    local nearby, range = nearby_storage()
+    local all_chests = accessible_chests()
     local rows = {}
-    if open_actor and engine.is_valid(open_actor) then
-        local open_label = organiser.label_of(open_actor)
-        rows[#rows + 1] = {
-            title = "OPEN STORAGE: " .. (open_label and ("[" .. open_label .. "]") or "UNLABELLED"),
-            value = "nav:label_open",
-            detail = "Open storage is ready. Click to label this container.",
-            compact = true,
-        }
-        rows[#rows + 1] = {
-            title = "LABEL THIS CONTAINER  >",
-            value = "nav:label_open",
-            detail = "Select a label suggestion or type a custom label.",
-            compact = true,
-        }
-        rows[#rows + 1] = {
-            title = "SORT OPEN CONTAINER",
-            value = "action:sort_open",
-            detail = "Consolidate partial stacks and sort contents inside this container.",
-            compact = true,
-        }
-        rows[#rows + 1] = {
-            title = (open_label == "Trash") and "REMOVE TRASH LABEL" or "MARK AS TRASH (INCINERATOR)",
-            value = "action:toggle_trash_open",
-            detail = "Trash containers delete their contents when closed.",
-            compact = true,
-        }
+    local open_inv, open_actor = organiser.open_storage()
+    if open_inv and open_actor and engine.is_valid(open_actor) then
+        local label = organiser.label_of(open_actor) or "Unlabelled"
+        rows[#rows + 1] = link("Open Storage  •  " .. label, "label_open")
     end
-
-    if #nearby > 0 then
-        if #nearby >= 2 then
-            rows[#rows + 1] = {
-                title = "RESORT ALL NEARBY CHESTS",
-                value = "action:resort_nearby",
-                detail = "Redistribute misplaced items across all labelled chests within reach.",
-                compact = true,
-            }
-        end
-        for _, st in ipairs(nearby) do
-            local dist_m = math.floor(st.distance or 0)
-            local label_tag = st.label or "Unlabelled"
-            rows[#rows + 1] = {
-                title = label_tag .. "  •  " .. dist_m .. " m away",
-                value = "inspect:" .. label_tag,
-                detail = "Labelled container within reach (" .. tostring(s.rangeMeters) .. " m max).",
-                compact = true,
-            }
-        end
-    else
-        rows[#rows + 1] = {
-            title = "NO LABELLED STORAGE IN REACH",
-            value = "noop",
-            detail = "Open any built chest or container and set a label to enable deposit.",
-            compact = true,
-        }
-    end
-
-    rows[#rows + 1] = {
-        title = "AUTO-ORGANISE BASE (FULL RE-PLAN & RENAME)  *",
-        value = "action:auto_organise",
-        detail = "Full base bank sort: re-plan, rename non-Trash chests (overriding existing names), and re-sort.",
-        compact = true,
-    }
-    rows[#rows + 1] = {
-        title = "FILL UNLABELLED CHESTS ONLY",
-        value = "action:fill_unlabelled",
-        detail = "Assign bank roles only to unlabelled chests while keeping existing names, then re-sort.",
-        compact = true,
-    }
-    rows[#rows + 1] = {
-        title = "STORAGE & WORKSTATION ADVISOR  >",
-        value = "nav:advisor",
-        detail = "Inspect base layout, check workstation storage proximity, and view chest recommendations.",
-        compact = true,
-    }
-    rows[#rows + 1] = {
-        title = "CARRIED ITEMS & LOCKS  >",
-        value = "nav:locks",
-        detail = "View carried items and configure retention keep amounts.",
-        compact = true,
-    }
-    rows[#rows + 1] = {
-        title = "SETTINGS  >",
-        value = "nav:settings",
-        detail = "Configure deposit reach, rune costs, trash rules, and animations.",
-        compact = true,
-    }
-    local status = string.format("STORAGE ORGANISER  •  %d labelled container(s) in reach (%d m)",
-        #nearby, s.rangeMeters or 40)
+    rows[#rows + 1] = link("Find Items Across Chests", "find_items")
+    rows[#rows + 1] = link(("Nearby Storage  (%d)"):format(#all_chests), "nearby")
+    rows[#rows + 1] = link("Base Setup", "base_setup")
+    rows[#rows + 1] = link("Base Advisor", "advisor")
+    rows[#rows + 1] = link("Carried Items & Locks", "locks")
+    rows[#rows + 1] = link("Settings", "settings")
+    local actions = { "deposit" }
+    if #nearby >= 2 then actions[#actions + 1] = "resort-nearby" end
     return {
-        status = status,
-        detail = last_message,
-        rows = rows,
+        detail = last_message or ("%d accessible containers (%d labelled, %d m reach)"):format(#all_chests, #nearby, range),
+        preview = {
+            title = "Storage Organiser", compact = true,
+            stats = {
+                { label = "Nearby containers", value = #all_chests },
+                { label = "Labelled", value = #nearby },
+                { label = "Reach", value = range .. " m" },
+            },
+        },
+        rows = rows, poolRows = true, actionIds = actions,
+        inlineActions = state and state.uiInlineActions,
+    }
+end
+
+local function find_items_view(state)
+    local rows = { back() }
+    local hits, meta = {}, { chests = 0, range = 0, query = search_query }
+    if chest_explorer and type(chest_explorer.search_items) == "function" then
+        hits, meta = chest_explorer.search_items(search_query, { limit = 80 })
+    end
+    last_find_hits = hits
+
+    local pages = math.max(1, math.ceil(#hits / FIND_PER_PAGE))
+    find_page = math.min(find_page, pages)
+    local previous = find_page > 1 and "find:previous" or nil
+    local following = find_page < pages and "find:next" or nil
+    if not (state and state.uiPagination) then
+        if previous then rows[#rows + 1] = { title = "‹  Previous", value = previous, compact = true } end
+        if following then rows[#rows + 1] = { title = "Next  ›", value = following, compact = true } end
+    end
+
+    local selected_match = nil
+    if selected_hit then
+        for _, h in ipairs(hits) do
+            if h.key == selected_hit.key then
+                selected_match = h
+                selected_hit = h
+                break
+            end
+        end
+        if not selected_match then selected_hit = nil end
+    end
+
+    local first = (find_page - 1) * FIND_PER_PAGE + 1
+    for idx = first, math.min(first + FIND_PER_PAGE - 1, #hits) do
+        local hit = hits[idx]
+        local prefix = (selected_match and selected_match.key == hit.key) and "› " or ""
+        local detail
+        if hit.kind == "player" then
+            detail = ("Already in your inventory (slot %d)."):format((hit.slot or 0) + 1)
+        else
+            local role_text = hit.chest_role and ("  •  Role: " .. hit.chest_role) or ""
+            detail = ("%s  •  %.1f m  •  Slot %d%s"):format(
+                hit.chest_title or "Chest", hit.chest_distance or 0, (hit.slot or 0) + 1, role_text)
+        end
+        rows[#rows + 1] = {
+            title = ("%s%s  x%d  •  %s"):format(prefix, hit.item_name, hit.count or 1, hit.chest_title or "Chest"),
+            value = "find_hit:" .. idx,
+            detail = detail,
+            icon = hit.icon,
+            compact = true,
+        }
+    end
+
+    local actions = { "search-items" }
+    if search_query ~= "" then actions[#actions + 1] = "clear-search" end
+    if selected_match and selected_match.kind == "chest" then
+        actions[#actions + 1] = "withdraw-one"
+        if (selected_match.count or 1) > 1 then
+            actions[#actions + 1] = "withdraw-stack"
+        end
+        actions[#actions + 1] = "inspect-hit-chest"
+        actions[#actions + 1] = "pin-chest"
+    end
+
+    local query_label = search_query ~= "" and ('"' .. search_query .. '"') or "All nearby items"
+    local detail_text = last_message or meta.error
+        or ("%d match(es) for %s across %d containers (%d m range)."):format(
+            #hits, query_label, meta.chests or 0, meta.range or 80)
+    local preview = {
+        title = "Find Items Across Chests", compact = true,
+        stats = {
+            { label = "Query", value = search_query ~= "" and search_query or "All items" },
+            { label = "Matches", value = #hits .. (meta.truncated and "+" or "") },
+            { label = "Containers scanned", value = meta.chests or 0 },
+        },
+    }
+    if selected_match then
+        preview.stats[#preview.stats + 1] = {
+            label = "Selected",
+            value = ("%s x%d (%s)"):format(selected_match.item_name, selected_match.count or 1, selected_match.chest_title),
+        }
+    end
+
+    return {
+        status = "Find Items", detail = detail_text, preview = preview,
+        rows = rows, poolRows = true,
+        pagination = state and state.uiPagination and {
+            page = find_page, pages = pages, previous = previous, next = following,
+        } or nil,
+        actionIds = actions,
+        inlineActions = state and state.uiInlineActions,
+    }
+end
+
+local function nearby_view(state)
+    local chests, range = accessible_chests()
+    last_nearby_chests = chests
+    local pages = math.max(1, math.ceil(#chests / NEARBY_PER_PAGE))
+    nearby_page = math.min(nearby_page, pages)
+    local rows = { back() }
+    local previous = nearby_page > 1 and "nearby:previous" or nil
+    local following = nearby_page < pages and "nearby:next" or nil
+    if not (state and state.uiPagination) then
+        if previous then rows[#rows + 1] = { title = "‹  Previous", value = previous, compact = true } end
+        if following then rows[#rows + 1] = { title = "Next  ›", value = following, compact = true } end
+    end
+    local first = (nearby_page - 1) * NEARBY_PER_PAGE + 1
+    for index = first, math.min(first + NEARBY_PER_PAGE - 1, #chests) do
+        local chest = chests[index]
+        local title = chest.title or chest.label or "Storage"
+        local open_tag = chest.is_open and " [OPEN]" or ""
+        local role_tag = chest.role and ("Role: " .. chest.role .. "  •  ") or "Unlabelled  •  "
+        rows[#rows + 1] = {
+            title = ("%s%s  •  %d/%d  •  %.0f m  ›"):format(
+                title, open_tag, chest.used_slots or 0, chest.max_slots or 0, chest.distance or 0),
+            value = "inspect:" .. index,
+            detail = ("%sSelect to browse contents, withdraw items, or pin on map."):format(role_tag),
+            compact = true,
+        }
+    end
+    local summary = last_message
+        or (#chests == 0 and ("No accessible storage within %d m."):format(tonumber(range) or 80)
+        or ("%d accessible containers within %d m. Click any container to inspect or withdraw."):format(#chests, tonumber(range) or 80))
+    return {
+        status = "Nearby Storage", detail = summary, rows = rows, poolRows = true,
+        pagination = state and state.uiPagination and {
+            page = nearby_page, pages = pages, previous = previous, next = following,
+        } or nil,
+        actionIds = #chests >= 2 and { "search-items", "resort-nearby" } or { "search-items" },
+        inlineActions = state and state.uiInlineActions,
+    }
+end
+
+local function chest_detail_view(state)
+    local chests = accessible_chests()
+    last_nearby_chests = chests
+    local chest = find_chest_by_key(chests, selected_chest_key)
+    if not chest then
+        return nearby_view(state)
+    end
+
+    local items = chest.slots or {}
+    local rows = { back("Nearby Storage", "nearby") }
+    local pages = math.max(1, math.ceil(#items / CHEST_PER_PAGE))
+    chest_page = math.min(chest_page, pages)
+    local previous = chest_page > 1 and "chest_detail:previous" or nil
+    local following = chest_page < pages and "chest_detail:next" or nil
+    if not (state and state.uiPagination) then
+        if previous then rows[#rows + 1] = { title = "‹  Previous", value = previous, compact = true } end
+        if following then rows[#rows + 1] = { title = "Next  ›", value = following, compact = true } end
+    end
+
+    local icons = package.loaded.rlm_row_icons
+    local selected_item = nil
+    local first = (chest_page - 1) * CHEST_PER_PAGE + 1
+    for i = first, math.min(first + CHEST_PER_PAGE - 1, #items) do
+        local info = items[i]
+        local prefix = (selected_chest_slot == info.slot) and "› " or ""
+        if selected_chest_slot == info.slot then selected_item = info end
+        local icon = icons and type(icons.path) == "function"
+            and (icons.path(info.name) or icons.path(info.id)) or nil
+        rows[#rows + 1] = {
+            title = ("%s%s  x%d"):format(prefix, info.name or "Unknown", info.count or 1),
+            value = "chest_slot:" .. tostring(info.slot),
+            detail = ("Slot %d%s"):format((info.slot or 0) + 1, chest.is_open and "  •  Currently open" or ""),
+            icon = icon,
+            compact = true,
+        }
+    end
+
+    if #items == 0 then
+        rows[#rows + 1] = { title = "Container is empty", value = "noop", detail = "No stored items.", compact = true }
+    end
+
+    local actions = { "pin-chest" }
+    if selected_item then
+        actions[#actions + 1] = "withdraw-one"
+        if (selected_item.count or 1) > 1 then
+            actions[#actions + 1] = "withdraw-stack"
+        end
+    end
+
+    return {
+        status = chest.title or "Chest Contents",
+        detail = last_message or ("%d/%d slots used  •  %.1f m away. Select an item to withdraw."):format(
+            chest.used_slots or 0, chest.max_slots or 0, chest.distance or 0),
+        preview = {
+            title = chest.title or "Chest Contents", compact = true,
+            stats = {
+                { label = "Distance", value = ("%.1f m"):format(chest.distance or 0) },
+                { label = "Slots", value = ("%d / %d"):format(chest.used_slots or 0, chest.max_slots or 0) },
+                { label = "Role", value = chest.role or "Unlabelled" },
+            },
+        },
+        rows = rows, poolRows = true,
+        pagination = state and state.uiPagination and {
+            page = chest_page, pages = pages, previous = previous, next = following,
+        } or nil,
+        actionIds = actions,
+        inlineActions = state and state.uiInlineActions,
+    }
+end
+
+local function base_setup_view(state)
+    return {
+        status = "Base Setup",
+        detail = "Fill Unlabelled keeps existing labels. Re-plan & Rename can change labels across the base.",
+        rows = { back() }, poolRows = true,
+        inlineActions = state and state.uiInlineActions,
+        actionIds = { "fill-unlabelled", "auto-organise" },
     }
 end
 
 local function label_open_view()
     local open_inv, open_actor = organiser.open_storage()
     local rows = {
-        {
-            title = "<  BACK TO OVERVIEW",
-            value = "nav:overview",
-            detail = "Return to the storage organiser overview.",
-            compact = true,
-        },
+        back(),
     }
 
     if not open_inv or not open_actor then
-        rows[#rows + 1] = {
-            title = "NO STORAGE OPEN",
-            value = "nav:overview",
-            detail = "Open a chest or container in-game to assign labels.",
-            compact = true,
-        }
         return {
-            status = "LABEL CONTAINER: NO STORAGE OPEN",
-            detail = "Please open a storage container first.",
+            status = "Open Storage",
+            detail = "Open a chest or container to assign a label.",
             rows = rows,
+            actionIds = {},
         }
     end
 
     local current = organiser.label_of(open_actor)
     local suggestions = organiser.label_suggestions(open_inv)
-
-    rows[#rows + 1] = {
-        title = "CURRENT LABEL: " .. (current and ("[" .. current .. "]") or "NONE"),
-        value = "noop",
-        detail = "Current label applied to this container.",
-        compact = true,
-    }
 
     for _, sug in ipairs(suggestions) do
         local is_cur = sug == current
@@ -179,33 +368,25 @@ local function label_open_view()
     end
 
     rows[#rows + 1] = {
-        title = "SORT OPEN CONTAINER",
-        value = "action:sort_open",
-        detail = "Consolidate partial stacks and sort contents inside this container.",
-        compact = true,
-    }
-    rows[#rows + 1] = {
         title = "CLEAR LABEL",
-        value = "apply_label:CLEAR",
+        value = "apply_label:CLEAR", action = true,
         detail = "Remove any label from this container.",
         compact = true,
     }
 
     return {
-        status = "LABEL OPEN STORAGE  •  " .. (current or "Unlabelled"),
-        detail = "Click a suggestion below or type a label into the input field and press LABEL STORAGE.",
+        status = "Open Storage  •  " .. (current or "Unlabelled"),
+        detail = "Choose a suggested label or enter your own.",
         rows = rows,
+        poolRows = true,
+        actionIds = { "sort-open", "label", "trash" },
+        inputValue = current or "",
     }
 end
 
 local function locks_view()
     local rows = {
-        {
-            title = "<  BACK TO OVERVIEW",
-            value = "nav:overview",
-            detail = "Return to the storage organiser overview.",
-            compact = true,
-        },
+        back(),
     }
 
     local controller = engine.local_controller()
@@ -254,7 +435,7 @@ local function locks_view()
 
     rows[#rows + 1] = {
         title = "CLEAR ALL RETENTION LOCKS",
-        value = "action:clear_all_locks",
+        value = "action:clear_all_locks", action = true,
         detail = "Remove all item keep locks, allowing all carried items to be deposited.",
         compact = true,
     }
@@ -267,22 +448,26 @@ local function locks_view()
         status = "ITEM RETENTION LOCKS",
         detail = prompt,
         rows = rows,
+        poolRows = true,
+        actionIds = { "lock" },
+        inputValue = selected_lock_item and (locks_table[selected_lock_item] or "all") or "",
     }
 end
 
 local function settings_view()
     local s = organiser.settings()
     local rows = {
-        {
-            title = "<  BACK TO OVERVIEW",
-            value = "nav:overview",
-            detail = "Return to the storage organiser overview.",
-            compact = true,
-        },
+        back(),
         {
             title = "AUTO-LOAD ON CHEST OPEN: " .. (s.autoOpenOnStorage ~= false and "ON" or "OFF"),
             value = "setting_toggle:autoOpenOnStorage",
             detail = "Show Organiser when opening built storage.",
+            compact = true,
+        },
+        {
+            title = "OSRS BANK CHEST UI: " .. (s.osrsBankMode ~= false and "ON" or "OFF"),
+            value = "setting_toggle:osrsBankMode",
+            detail = "Replace the center chest window with the OSRS Bank view (tabs, icon grid, quick withdraw) while keeping your backpack visible.",
             compact = true,
         },
         {
@@ -322,6 +507,12 @@ local function settings_view()
             compact = true,
         },
         {
+            title = "DEPOSIT MAGIC XP BONUS: " .. (s.depositXp and "ON" or "OFF"),
+            value = "setting_toggle:depositXp",
+            detail = "Award small magic XP bonus on successful deposit (120 s cooldown).",
+            compact = true,
+        },
+        {
             title = "DEPOSIT RUNE COST: " .. (s.costEnabled and (tostring(s.costAmount) .. " " .. tostring(s.costRune)) or "FREE"),
             value = "setting_toggle:costEnabled",
             detail = "Toggle rune requirement for backpack deposit.",
@@ -336,48 +527,32 @@ local function settings_view()
     }
 
     return {
-        status = "ORGANISER SETTINGS",
-        detail = "Click any setting row to toggle or cycle values.",
+        status = "Organiser Settings",
+        detail = "Choose a setting to toggle or cycle it.",
         rows = rows,
+        poolRows = true,
+        actionIds = {},
     }
 end
 
 local function advisor_view()
     local report, err = organiser.base_advisor_report()
     local rows = {
-        {
-            title = "<  BACK TO OVERVIEW",
-            value = "nav:overview",
-            detail = "Return to the storage organiser overview.",
-            compact = true,
-        },
-        {
-            title = "AUTO-ORGANISE BASE (BANK SORT)  *",
-            value = "action:auto_organise",
-            detail = "Automatically assign bank-sorted roles to chests and re-sort all base storage.",
-            compact = true,
-        },
+        back(),
     }
 
     if not report then
-        rows[#rows + 1] = {
-            title = "ADVISOR SCAN FAILED",
-            value = "noop",
-            detail = err or "Could not scan local base storage.",
-            compact = true,
-        }
         return {
             status = "BASE STORAGE ADVISOR: SCAN FAILED",
             detail = err or "Failed to scan base storage.",
             rows = rows,
+            actionIds = { "auto-organise", "deposit" },
         }
     end
 
     if #report.recommendations > 0 then
         rows[#rows + 1] = {
-            title = string.format("RECOMMENDED ACTIONS (%d):", #report.recommendations),
-            value = "noop",
-            detail = "Suggested chest placements and label reassignments for optimal base flow.",
+            heading = "Recommendations",
             compact = true,
         }
         for _, rec in ipairs(report.recommendations) do
@@ -399,9 +574,7 @@ local function advisor_view()
 
     if #report.workstations > 0 then
         rows[#rows + 1] = {
-            title = string.format("DETECTED WORKSTATIONS (%d):", #report.workstations),
-            value = "noop",
-            detail = "Crafting and processing stations detected within base reach radius.",
+            heading = "Workstations",
             compact = true,
         }
         for _, ws in ipairs(report.workstations) do
@@ -420,9 +593,7 @@ local function advisor_view()
     end
 
     rows[#rows + 1] = {
-        title = "BANK THEME STORAGE BREAKDOWN:",
-        value = "noop",
-        detail = "Item stack allocation across bank-sorted themes.",
+        heading = "Storage by category",
         compact = true,
     }
     for _, theme in ipairs(organiser.bank_themes()) do
@@ -450,7 +621,21 @@ local function advisor_view()
             report.total_chests, #report.workstations, tier_label),
         detail = rec_summary,
         rows = rows,
+        poolRows = true,
+        actionIds = { "auto-organise", "deposit" },
     }
+end
+
+local function ensure_hud(state)
+    local hud = package.loaded.rlm_organiser_hud
+    if not hud and type(require) == "function" then
+        local ok, loaded_hud = pcall(require, "rlm_organiser_hud")
+        if ok and type(loaded_hud) == "table" then hud = loaded_hud end
+    end
+    if type(hud) == "table" and type(hud.start) == "function" then
+        pcall(hud.start, state)
+    end
+    return hud
 end
 
 function M.start(state)
@@ -460,34 +645,84 @@ function M.start(state)
         return false, storage_error
     end
     storage_error = nil
-    local started, hud_error = hud.start(state)
-    if not started then
-        log.warn("Organiser dock unavailable: " .. tostring(hud_error))
-    end
+    local hud = ensure_hud(state)
     organiser.arm_hooks(hud)
     return true
 end
 
-function M.activate()
+function M.activate(state)
     if storage_error then
         return { status = "Organiser is unavailable.", detail = storage_error, rows = {} }
-    elseif current_view == "advisor" then
-        return advisor_view()
-    elseif current_view == "label_open" then
-        return label_open_view()
-    elseif current_view == "locks" then
-        return locks_view()
-    elseif current_view == "settings" then
-        return settings_view()
     end
-    return overview_view()
+    ensure_hud(state)
+
+    local view
+    if current_view == "advisor" then
+        view = advisor_view()
+    elseif current_view == "label_open" then
+        view = label_open_view()
+    elseif current_view == "locks" then
+        view = locks_view()
+    elseif current_view == "settings" then
+        view = settings_view()
+    elseif current_view == "nearby" then
+        view = nearby_view(state)
+    elseif current_view == "find_items" then
+        view = find_items_view(state)
+    elseif current_view == "chest_detail" then
+        view = chest_detail_view(state)
+    elseif current_view == "base_setup" then
+        view = base_setup_view(state)
+    else
+        return overview_view(state)
+    end
+    view.poolRows, view.pinFirstRow = true, true
+    return view
 end
 
 function M.select_row(state, value)
-    if storage_error then return false end
     local text = tostring(value or "")
     if text == "nav:overview" then
         current_view = "overview"
+        return true
+    elseif text == "nav:find_items" then
+        current_view, find_page, last_message = "find_items", 1, nil
+        return true
+    elseif text == "nav:nearby" then
+        current_view, nearby_page, last_message = "nearby", 1, nil
+        return true
+    elseif text == "nav:chest_detail" then
+        current_view = "chest_detail"
+        return true
+    elseif text == "nav:base_setup" then
+        current_view = "base_setup"
+        return true
+    elseif text == "nearby:previous" or text == "nearby:next" then
+        nearby_page = math.max(1, nearby_page + (text == "nearby:next" and 1 or -1))
+        return true
+    elseif text == "find:previous" or text == "find:next" then
+        find_page = math.max(1, find_page + (text == "find:next" and 1 or -1))
+        return true
+    elseif text == "chest_detail:previous" or text == "chest_detail:next" then
+        chest_page = math.max(1, chest_page + (text == "chest_detail:next" and 1 or -1))
+        return true
+    elseif text:match("^inspect:%d+$") then
+        local idx = tonumber(text:match("^inspect:(%d+)$"))
+        local chest = idx and last_nearby_chests[idx] or nil
+        if chest then
+            selected_chest_key = chest.key
+            selected_chest_slot = nil
+            chest_page = 1
+            last_message = nil
+            current_view = "chest_detail"
+        end
+        return true
+    elseif text:match("^find_hit:%d+$") then
+        local idx = tonumber(text:match("^find_hit:(%d+)$"))
+        selected_hit = idx and last_find_hits[idx] or nil
+        return true
+    elseif text:match("^chest_slot:%d+$") then
+        selected_chest_slot = tonumber(text:match("^chest_slot:(%d+)$"))
         return true
     elseif text == "nav:label_open" then
         current_view = "label_open"
@@ -577,11 +812,14 @@ function M.select_row(state, value)
 end
 
 function M.run_action(state, action_id, input)
-    if storage_error then return false, storage_error end
     local text = tostring(input or ""):gsub("^%s+", ""):gsub("%s+$", "")
 
     if action_id == "auto-organise" then
         local ok, message = organiser.auto_organise_base()
+        last_message = message
+        return ok, message
+    elseif action_id == "fill-unlabelled" then
+        local ok, message = organiser.auto_organise_base({ force_replan = false })
         last_message = message
         return ok, message
     elseif action_id == "replan-organise" then
@@ -651,14 +889,102 @@ function M.run_action(state, action_id, input)
             last_message = "Container marked as Trash (will incinerate contents on close)."
             return true, "Marked as Trash container."
         end
+    elseif action_id == "search-items" then
+        if not chest_explorer then return false, "Chest explorer service is not loaded." end
+        search_query = text
+        find_page = 1
+        selected_hit = nil
+        current_view = "find_items"
+        local hits, meta = chest_explorer.search_items(search_query, { limit = 80 })
+        last_find_hits = hits
+        for _, h in ipairs(hits) do
+            if h.kind == "chest" then
+                selected_hit = h
+                break
+            end
+        end
+        if not selected_hit and hits[1] then selected_hit = hits[1] end
+        local q_label = search_query ~= "" and ('"' .. search_query .. '"') or "all items"
+        local msg = ("%d match(es) for %s across %d containers."):format(#hits, q_label, meta.chests or 0)
+        last_message = msg
+        return true, msg
+    elseif action_id == "clear-search" then
+        search_query = ""
+        find_page = 1
+        selected_hit = nil
+        last_message = nil
+        return true, "Showing all nearby chest items."
+    elseif action_id == "inspect-hit-chest" then
+        if not selected_hit or not selected_hit.chest_key then
+            return false, "Select a chest search result first."
+        end
+        selected_chest_key = selected_hit.chest_key
+        selected_chest_slot = selected_hit.slot
+        chest_page = 1
+        last_message = nil
+        current_view = "chest_detail"
+        return true, "Opened chest inspector for " .. (selected_hit.chest_title or "chest") .. "."
+    elseif action_id == "pin-chest" then
+        if not chest_explorer then return false, "Chest explorer service is not loaded." end
+        local target = nil
+        if current_view == "chest_detail" and selected_chest_key then
+            target = find_chest_by_key(accessible_chests(), selected_chest_key)
+        elseif selected_hit and selected_hit.kind == "chest" then
+            target = selected_hit
+        end
+        local ok, msg = chest_explorer.pin_chest(target)
+        last_message = msg
+        return ok, msg
+    elseif action_id == "withdraw-one" or action_id == "withdraw-stack" then
+        if not chest_explorer then return false, "Chest explorer service is not loaded." end
+        local target_hit = nil
+        if current_view == "chest_detail" and selected_chest_key and selected_chest_slot ~= nil then
+            local chest = find_chest_by_key(accessible_chests(), selected_chest_key)
+            if chest then
+                for _, item in ipairs(chest.slots or {}) do
+                    if item.slot == selected_chest_slot then
+                        target_hit = {
+                            kind = "chest",
+                            chest_key = chest.key,
+                            item_name = item.name,
+                            item_id = item.id,
+                            count = item.count,
+                            slot = item.slot,
+                            chest_title = chest.title,
+                            chest_actor = chest.actor,
+                            chest_inv = chest.inv,
+                        }
+                        break
+                    end
+                end
+            end
+        elseif selected_hit then
+            target_hit = selected_hit
+        end
+        if not target_hit then
+            return false, "Select a chest item first."
+        end
+        local amount = (action_id == "withdraw-one") and 1 or nil
+        local ok, msg = chest_explorer.withdraw_to_backpack(target_hit, amount, function(done_ok, done_err)
+            if done_ok then
+                last_message = ("Withdrew %s from %s."):format(target_hit.item_name or "item", target_hit.chest_title or "chest")
+            else
+                last_message = tostring(done_err or "Withdrawal failed.")
+            end
+        end)
+        last_message = msg
+        return ok, msg
     end
 
     return false, "Unknown action: " .. tostring(action_id)
 end
 
 function M.stop()
+    local hud = package.loaded.rlm_organiser_hud
+    if type(hud) == "table" and type(hud.stop) == "function" then
+        pcall(hud.stop)
+    end
     organiser.stop()
-    hud.stop()
     return true
 end
 
