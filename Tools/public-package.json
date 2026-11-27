@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "id": "organiser",
+  "boundaryScanPaths": ["Modules"],
+  "forbiddenPatterns": [
+    { "pattern": "rlm_(shortcut_bindings|cheats)", "reason": "private shortcut or cheat dependency" },
+    { "pattern": "(Magic XP|depositXp|award_magic|teleport|SpawnActor)", "reason": "private reward or gameplay-write feature" }
+  ],
+  "validatePng": true
+}

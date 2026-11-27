@@ -507,12 +507,6 @@ local function settings_view()
             compact = true,
         },
         {
-            title = "DEPOSIT MAGIC XP BONUS: " .. (s.depositXp and "ON" or "OFF"),
-            value = "setting_toggle:depositXp",
-            detail = "Award small magic XP bonus on successful deposit (120 s cooldown).",
-            compact = true,
-        },
-        {
             title = "DEPOSIT RUNE COST: " .. (s.costEnabled and (tostring(s.costAmount) .. " " .. tostring(s.costRune)) or "FREE"),
             value = "setting_toggle:costEnabled",
             detail = "Toggle rune requirement for backpack deposit.",
